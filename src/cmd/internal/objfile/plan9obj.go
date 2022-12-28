@@ -143,6 +143,8 @@ func (f *plan9File) goarch() string {
 		return "amd64"
 	case plan9obj.MagicARM:
 		return "arm"
+	case plan9obj.MagicARM64:
+		return "arm64"
 	}
 	return ""
 }

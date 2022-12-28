@@ -27,7 +27,6 @@ const UnlinkablePkg = "<unlinkable>" // invalid package path, used when compiled
 
 // Entry point of writing new object file.
 func WriteObjFile(ctxt *Link, b *bio.Writer) {
-
 	debugAsmEmit(ctxt)
 
 	genFuncInfoSyms(ctxt)
