@@ -11,7 +11,10 @@
 
 package syscall
 
-import "sync"
+import (
+	"runtime"
+	"sync"
+)
 
 var (
 	wdmu  sync.Mutex // guards following
@@ -20,6 +23,8 @@ var (
 )
 
 func Fixwd() {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	wdmu.Lock()
 	defer wdmu.Unlock()
 	fixwdLocked()
@@ -40,6 +45,9 @@ func fixwdLocked() {
 }
 
 func fixwd(paths ...string) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	for _, path := range paths {
 		if path != "" && path[0] != '/' && path[0] != '#' {
 			Fixwd()
@@ -59,6 +67,8 @@ func getwd() (wd string, err error) {
 }
 
 func Getwd() (wd string, err error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	wdmu.Lock()
 	defer wdmu.Unlock()
 
@@ -75,6 +85,8 @@ func Getwd() (wd string, err error) {
 }
 
 func Chdir(path string) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	fixwd(path)
 	wdmu.Lock()
 	defer wdmu.Unlock()
