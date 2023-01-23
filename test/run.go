@@ -124,7 +124,7 @@ func main() {
 	findExecCmd()
 
 	// Disable parallelism if printing or if using a simulator.
-	if *verbose || len(findExecCmd()) > 0 {
+	if *verbose || len(findExecCmd()) > 0 || runtime.GOOS == "plan9" {
 		*numParallel = 1
 		*runoutputLimit = 1
 	}
