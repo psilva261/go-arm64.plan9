@@ -324,7 +324,8 @@ func CPUIsSlow() bool {
 	case "arm", "mips", "mipsle", "mips64", "mips64le":
 		return true
 	}
-	return false
+
+	return runtime.GOARCH == "arm64" && runtime.GOOS == "plan9"
 }
 
 // SkipIfShortAndSlow skips t if -short is set and the CPU running the test is
