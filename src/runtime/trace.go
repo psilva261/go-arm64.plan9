@@ -66,11 +66,11 @@ const (
 	traceEvGoBlockGC         = 42 // goroutine blocks on GC assist [timestamp, stack]
 	traceEvGCMarkAssistStart = 43 // GC mark assist start [timestamp, stack]
 	traceEvGCMarkAssistDone  = 44 // GC mark assist done [timestamp]
-	traceEvUserTaskCreate    = 45 // trace.NewContext [timestamp, internal task id, internal parent task id, stack, name string]
+	traceEvUserTaskCreate    = 45 // trace.NewTask [timestamp, internal task id, internal parent task id, name string, stack]
 	traceEvUserTaskEnd       = 46 // end of a task [timestamp, internal task id, stack]
-	traceEvUserRegion        = 47 // trace.WithRegion [timestamp, internal task id, mode(0:start, 1:end), stack, name string]
+	traceEvUserRegion        = 47 // trace.WithRegion [timestamp, internal task id, mode(0:start, 1:end), name string, stack]
 	traceEvUserLog           = 48 // trace.Log [timestamp, internal task id, key string id, stack, value string]
-	traceEvCPUSample         = 49 // CPU profiling sample [timestamp, stack, real timestamp, real P id (-1 when absent), goroutine id]
+	traceEvCPUSample         = 49 // CPU profiling sample [timestamp, real timestamp, real P id (-1 when absent), goroutine id, stack]
 	traceEvCount             = 50
 	// Byte is used but only 6 bits are available for event type.
 	// The remaining 2 bits are used to specify the number of arguments.
@@ -1117,9 +1117,7 @@ func (tab *traceStackTable) put(pcs []uintptr) uint32 {
 		id = stk.id
 		stk.n = len(pcs)
 		stkpc := stk.stack()
-		for i, pc := range pcs {
-			stkpc[i] = pc
-		}
+		copy(stkpc, pcs)
 		part := int(hash % uintptr(len(tab.tab)))
 		stk.link = tab.tab[part]
 		atomicstorep(unsafe.Pointer(&tab.tab[part]), unsafe.Pointer(stk))
@@ -1546,10 +1544,12 @@ func trace_userLog(id uint64, category, message string) {
 
 	categoryID, bufp := traceString(bufp, pid, category)
 
-	extraSpace := traceBytesPerNumber + len(message) // extraSpace for the value string
+	// The log message is recorded after all of the normal trace event
+	// arguments, including the task, category, and stack IDs. We must ask
+	// traceEventLocked to reserve extra space for the length of the message
+	// and the message itself.
+	extraSpace := traceBytesPerNumber + len(message)
 	traceEventLocked(extraSpace, mp, pid, bufp, traceEvUserLog, 0, 3, id, categoryID)
-	// traceEventLocked reserved extra space for val and len(val)
-	// in buf, so buf now has room for the following.
 	buf := bufp.ptr()
 
 	// double-check the message and its length can fit.

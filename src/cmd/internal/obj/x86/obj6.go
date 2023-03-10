@@ -158,11 +158,11 @@ func progedit(ctxt *obj.Link, p *obj.Prog, newprog obj.ProgAlloc) {
 		}
 	}
 
-	// Android and Win64 use a tls offset determined at runtime. Rewrite
+	// Android and Windows use a tls offset determined at runtime. Rewrite
 	//	MOVQ TLS, BX
 	// to
 	//	MOVQ runtime.tls_g(SB), BX
-	if (isAndroid || (ctxt.Headtype == objabi.Hwindows && ctxt.Arch.Family == sys.AMD64)) &&
+	if (isAndroid || ctxt.Headtype == objabi.Hwindows) &&
 		(p.As == AMOVQ || p.As == AMOVL) && p.From.Type == obj.TYPE_REG && p.From.Reg == REG_TLS && p.To.Type == obj.TYPE_REG && REG_AX <= p.To.Reg && p.To.Reg <= REG_R15 {
 		p.From.Type = obj.TYPE_MEM
 		p.From.Name = obj.NAME_EXTERN
@@ -170,17 +170,23 @@ func progedit(ctxt *obj.Link, p *obj.Prog, newprog obj.ProgAlloc) {
 		p.From.Sym = ctxt.Lookup("runtime.tls_g")
 		p.From.Index = REG_NONE
 		if ctxt.Headtype == objabi.Hwindows {
-			// Win64 requires an additional indirection
+			// Windows requires an additional indirection
 			// to retrieve the TLS pointer,
-			// as runtime.tls_g contains the TLS offset from GS.
-			// add
+			// as runtime.tls_g contains the TLS offset from GS or FS.
+			// on AMD64 add
 			//	MOVQ 0(BX)(GS*1), BX
+			// on 386 add
+			//	MOVQ 0(BX)(FS*1), BX4
 			q := obj.Appendp(p, newprog)
 			q.As = p.As
 			q.From = obj.Addr{}
 			q.From.Type = obj.TYPE_MEM
 			q.From.Reg = p.To.Reg
-			q.From.Index = REG_GS
+			if ctxt.Arch.Family == sys.AMD64 {
+				q.From.Index = REG_GS
+			} else {
+				q.From.Index = REG_FS
+			}
 			q.From.Scale = 1
 			q.From.Offset = 0
 			q.To = p.To
@@ -491,6 +497,9 @@ func rewriteToUseGot(ctxt *obj.Link, p *obj.Prog, newprog obj.ProgAlloc) {
 	p2.As = p.As
 	p2.From = p.From
 	p2.To = p.To
+	if from3 := p.GetFrom3(); from3 != nil {
+		p2.SetFrom3(*from3)
+	}
 	if p.From.Name == obj.NAME_EXTERN {
 		p2.From.Reg = reg
 		p2.From.Name = obj.NAME_NONE
@@ -608,16 +617,12 @@ func preprocess(ctxt *obj.Link, cursym *obj.LSym, newprog obj.ProgAlloc) {
 	var bpsize int
 	if ctxt.Arch.Family == sys.AMD64 &&
 		!p.From.Sym.NoFrame() && // (1) below
-		!(autoffset == 0 && p.From.Sym.NoSplit()) && // (2) below
-		!(autoffset == 0 && !hasCall) { // (3) below
+		!(autoffset == 0 && !hasCall) { // (2) below
 		// Make room to save a base pointer.
 		// There are 2 cases we must avoid:
 		// 1) If noframe is set (which we do for functions which tail call).
-		// 2) Scary runtime internals which would be all messed up by frame pointers.
-		//    We detect these using a heuristic: frameless nosplit functions.
-		//    TODO: Maybe someday we label them all with NOFRAME and get rid of this heuristic.
 		// For performance, we also want to avoid:
-		// 3) Frameless leaf functions
+		// 2) Frameless leaf functions
 		bpsize = ctxt.Arch.PtrSize
 		autoffset += int32(bpsize)
 		p.To.Offset += int64(bpsize)
@@ -677,48 +682,43 @@ func preprocess(ctxt *obj.Link, cursym *obj.LSym, newprog obj.ProgAlloc) {
 		p, regg = loadG(ctxt, cursym, p, newprog)
 	}
 
-	// Delve debugger would like the next instruction to be noted as the end of the function prologue.
-	// TODO: are there other cases (e.g., wrapper functions) that need marking?
-	markedPrologue := false
-
-	if autoffset != 0 {
-		if autoffset%int32(ctxt.Arch.RegSize) != 0 {
-			ctxt.Diag("unaligned stack size %d", autoffset)
-		}
-		p = obj.Appendp(p, newprog)
-		p.As = AADJSP
-		p.From.Type = obj.TYPE_CONST
-		p.From.Offset = int64(autoffset)
-		p.Spadj = autoffset
-		p.Pos = p.Pos.WithXlogue(src.PosPrologueEnd)
-		markedPrologue = true
-	}
-
 	if bpsize > 0 {
 		// Save caller's BP
 		p = obj.Appendp(p, newprog)
 
-		p.As = AMOVQ
+		p.As = APUSHQ
 		p.From.Type = obj.TYPE_REG
 		p.From.Reg = REG_BP
-		p.To.Type = obj.TYPE_MEM
-		p.To.Reg = REG_SP
-		p.To.Scale = 1
-		p.To.Offset = int64(autoffset) - int64(bpsize)
-		if !markedPrologue {
-			p.Pos = p.Pos.WithXlogue(src.PosPrologueEnd)
-		}
 
 		// Move current frame to BP
 		p = obj.Appendp(p, newprog)
 
-		p.As = ALEAQ
-		p.From.Type = obj.TYPE_MEM
+		p.As = AMOVQ
+		p.From.Type = obj.TYPE_REG
 		p.From.Reg = REG_SP
-		p.From.Scale = 1
-		p.From.Offset = int64(autoffset) - int64(bpsize)
 		p.To.Type = obj.TYPE_REG
 		p.To.Reg = REG_BP
+	}
+
+	if autoffset%int32(ctxt.Arch.RegSize) != 0 {
+		ctxt.Diag("unaligned stack size %d", autoffset)
+	}
+
+	// localoffset is autoffset discounting the frame pointer,
+	// which has already been allocated in the stack.
+	localoffset := autoffset - int32(bpsize)
+	if localoffset != 0 {
+		p = obj.Appendp(p, newprog)
+		p.As = AADJSP
+		p.From.Type = obj.TYPE_CONST
+		p.From.Offset = int64(localoffset)
+		p.Spadj = localoffset
+	}
+
+	// Delve debugger would like the next instruction to be noted as the end of the function prologue.
+	// TODO: are there other cases (e.g., wrapper functions) that need marking?
+	if autoffset != 0 {
+		p.Pos = p.Pos.WithXlogue(src.PosPrologueEnd)
 	}
 
 	if cursym.Func().Text.From.Sym.Wrapper() {
@@ -926,24 +926,23 @@ func preprocess(ctxt *obj.Link, cursym *obj.LSym, newprog obj.ProgAlloc) {
 		if autoffset != 0 {
 			to := p.To // Keep To attached to RET for retjmp below
 			p.To = obj.Addr{}
-			if bpsize > 0 {
-				// Restore caller's BP
-				p.As = AMOVQ
-
-				p.From.Type = obj.TYPE_MEM
-				p.From.Reg = REG_SP
-				p.From.Scale = 1
-				p.From.Offset = int64(autoffset) - int64(bpsize)
-				p.To.Type = obj.TYPE_REG
-				p.To.Reg = REG_BP
+			if localoffset != 0 {
+				p.As = AADJSP
+				p.From.Type = obj.TYPE_CONST
+				p.From.Offset = int64(-localoffset)
+				p.Spadj = -localoffset
 				p = obj.Appendp(p, newprog)
 			}
 
-			p.As = AADJSP
-			p.From.Type = obj.TYPE_CONST
-			p.From.Offset = int64(-autoffset)
-			p.Spadj = -autoffset
-			p = obj.Appendp(p, newprog)
+			if bpsize > 0 {
+				// Restore caller's BP
+				p.As = APOPQ
+				p.To.Type = obj.TYPE_REG
+				p.To.Reg = REG_BP
+				p.Spadj = -int32(bpsize)
+				p = obj.Appendp(p, newprog)
+			}
+
 			p.As = obj.ARET
 			p.To = to
 

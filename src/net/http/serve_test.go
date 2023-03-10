@@ -1354,13 +1354,7 @@ func testServerAllowsBlockingRemoteAddr(t *testing.T, mode testMode) {
 	// Start another request and grab its connection
 	response2c := make(chan string, 1)
 	go fetch(2, response2c)
-	var conn2 net.Conn
-
-	select {
-	case conn2 = <-conns:
-	case <-time.After(time.Second):
-		t.Fatal("Second Accept didn't happen")
-	}
+	conn2 := <-conns
 
 	// Send a response on connection 2.
 	conn2.(*blockingRemoteAddrConn).addrs <- &net.TCPAddr{
@@ -1444,13 +1438,9 @@ func testTLSHandshakeTimeout(t *testing.T, mode testMode) {
 		t.Errorf("Read = %d, %v; want an error and no bytes", n, err)
 	}
 
-	select {
-	case v := <-errc:
-		if !strings.Contains(v, "timeout") && !strings.Contains(v, "TLS handshake") {
-			t.Errorf("expected a TLS handshake timeout error; got %q", v)
-		}
-	case <-time.After(5 * time.Second):
-		t.Errorf("timeout waiting for logged error")
+	v := <-errc
+	if !strings.Contains(v, "timeout") && !strings.Contains(v, "TLS handshake") {
+		t.Errorf("expected a TLS handshake timeout error; got %q", v)
 	}
 }
 
@@ -6566,10 +6556,10 @@ func TestQuerySemicolon(t *testing.T) {
 	t.Cleanup(func() { afterTest(t) })
 
 	tests := []struct {
-		query           string
-		xNoSemicolons   string
-		xWithSemicolons string
-		warning         bool
+		query              string
+		xNoSemicolons      string
+		xWithSemicolons    string
+		expectParseFormErr bool
 	}{
 		{"?a=1;x=bad&x=good", "good", "bad", true},
 		{"?a=1;b=bad&x=good", "good", "good", true},
@@ -6581,20 +6571,20 @@ func TestQuerySemicolon(t *testing.T) {
 		for _, tt := range tests {
 			t.Run(tt.query+"/allow=false", func(t *testing.T) {
 				allowSemicolons := false
-				testQuerySemicolon(t, mode, tt.query, tt.xNoSemicolons, allowSemicolons, tt.warning)
+				testQuerySemicolon(t, mode, tt.query, tt.xNoSemicolons, allowSemicolons, tt.expectParseFormErr)
 			})
 			t.Run(tt.query+"/allow=true", func(t *testing.T) {
-				allowSemicolons, expectWarning := true, false
-				testQuerySemicolon(t, mode, tt.query, tt.xWithSemicolons, allowSemicolons, expectWarning)
+				allowSemicolons, expectParseFormErr := true, false
+				testQuerySemicolon(t, mode, tt.query, tt.xWithSemicolons, allowSemicolons, expectParseFormErr)
 			})
 		}
 	})
 }
 
-func testQuerySemicolon(t *testing.T, mode testMode, query string, wantX string, allowSemicolons, expectWarning bool) {
+func testQuerySemicolon(t *testing.T, mode testMode, query string, wantX string, allowSemicolons, expectParseFormErr bool) {
 	writeBackX := func(w ResponseWriter, r *Request) {
 		x := r.URL.Query().Get("x")
-		if expectWarning {
+		if expectParseFormErr {
 			if err := r.ParseForm(); err == nil || !strings.Contains(err.Error(), "semicolon") {
 				t.Errorf("expected error mentioning semicolons from ParseForm, got %v", err)
 			}
@@ -6631,16 +6621,6 @@ func testQuerySemicolon(t *testing.T, mode testMode, query string, wantX string,
 	}
 	if got, want := string(slurp), wantX; got != want {
 		t.Errorf("Body = %q; want = %q", got, want)
-	}
-
-	if expectWarning {
-		if !strings.Contains(logBuf.String(), "semicolon") {
-			t.Errorf("got %q from ErrorLog, expected a mention of semicolons", logBuf.String())
-		}
-	} else {
-		if strings.Contains(logBuf.String(), "semicolon") {
-			t.Errorf("got %q from ErrorLog, expected no mention of semicolons", logBuf.String())
-		}
 	}
 }
 

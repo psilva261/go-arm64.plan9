@@ -172,47 +172,44 @@ func (deadlineExceededError) Error() string   { return "context deadline exceede
 func (deadlineExceededError) Timeout() bool   { return true }
 func (deadlineExceededError) Temporary() bool { return true }
 
-// An emptyCtx is never canceled, has no values, and has no deadline. It is not
-// struct{}, since vars of this type must have distinct addresses.
-type emptyCtx int
+// An emptyCtx is never canceled, has no values, and has no deadline.
+// It is the common base of backgroundCtx and todoCtx.
+type emptyCtx struct{}
 
-func (*emptyCtx) Deadline() (deadline time.Time, ok bool) {
+func (emptyCtx) Deadline() (deadline time.Time, ok bool) {
 	return
 }
 
-func (*emptyCtx) Done() <-chan struct{} {
+func (emptyCtx) Done() <-chan struct{} {
 	return nil
 }
 
-func (*emptyCtx) Err() error {
+func (emptyCtx) Err() error {
 	return nil
 }
 
-func (*emptyCtx) Value(key any) any {
+func (emptyCtx) Value(key any) any {
 	return nil
 }
 
-func (e *emptyCtx) String() string {
-	switch e {
-	case background:
-		return "context.Background"
-	case todo:
-		return "context.TODO"
-	}
-	return "unknown empty Context"
+type backgroundCtx struct{ emptyCtx }
+
+func (backgroundCtx) String() string {
+	return "context.Background"
 }
 
-var (
-	background = new(emptyCtx)
-	todo       = new(emptyCtx)
-)
+type todoCtx struct{ emptyCtx }
+
+func (todoCtx) String() string {
+	return "context.TODO"
+}
 
 // Background returns a non-nil, empty Context. It is never canceled, has no
 // values, and has no deadline. It is typically used by the main function,
 // initialization, and tests, and as the top-level Context for incoming
 // requests.
 func Background() Context {
-	return background
+	return backgroundCtx{}
 }
 
 // TODO returns a non-nil, empty Context. Code should use context.TODO when
@@ -220,7 +217,7 @@ func Background() Context {
 // surrounding function has not yet been extended to accept a Context
 // parameter).
 func TODO() Context {
-	return todo
+	return todoCtx{}
 }
 
 // A CancelFunc tells an operation to abandon its work.
@@ -272,7 +269,7 @@ func withCancel(parent Context) *cancelCtx {
 	if parent == nil {
 		panic("cannot create context from nil parent")
 	}
-	c := newCancelCtx(parent)
+	c := &cancelCtx{Context: parent}
 	propagateCancel(parent, c)
 	return c
 }
@@ -290,11 +287,6 @@ func Cause(c Context) error {
 		return cc.cause
 	}
 	return nil
-}
-
-// newCancelCtx returns an initialized cancelCtx.
-func newCancelCtx(parent Context) *cancelCtx {
-	return &cancelCtx{Context: parent}
 }
 
 // goroutines counts the number of goroutines ever created; for testing.
@@ -492,6 +484,13 @@ func (c *cancelCtx) cancel(removeFromParent bool, err, cause error) {
 // Canceling this context releases resources associated with it, so code should
 // call cancel as soon as the operations running in this Context complete.
 func WithDeadline(parent Context, d time.Time) (Context, CancelFunc) {
+	return WithDeadlineCause(parent, d, nil)
+}
+
+// WithDeadlineCause behaves like WithDeadline but also sets the cause of the
+// returned Context when the deadline is exceeded. The returned CancelFunc does
+// not set the cause.
+func WithDeadlineCause(parent Context, d time.Time, cause error) (Context, CancelFunc) {
 	if parent == nil {
 		panic("cannot create context from nil parent")
 	}
@@ -500,20 +499,20 @@ func WithDeadline(parent Context, d time.Time) (Context, CancelFunc) {
 		return WithCancel(parent)
 	}
 	c := &timerCtx{
-		cancelCtx: newCancelCtx(parent),
+		cancelCtx: cancelCtx{Context: parent},
 		deadline:  d,
 	}
 	propagateCancel(parent, c)
 	dur := time.Until(d)
 	if dur <= 0 {
-		c.cancel(true, DeadlineExceeded, nil) // deadline has already passed
+		c.cancel(true, DeadlineExceeded, cause) // deadline has already passed
 		return c, func() { c.cancel(false, Canceled, nil) }
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.err == nil {
 		c.timer = time.AfterFunc(dur, func() {
-			c.cancel(true, DeadlineExceeded, nil)
+			c.cancel(true, DeadlineExceeded, cause)
 		})
 	}
 	return c, func() { c.cancel(true, Canceled, nil) }
@@ -523,7 +522,7 @@ func WithDeadline(parent Context, d time.Time) (Context, CancelFunc) {
 // implement Done and Err. It implements cancel by stopping its timer then
 // delegating to cancelCtx.cancel.
 type timerCtx struct {
-	*cancelCtx
+	cancelCtx
 	timer *time.Timer // Under cancelCtx.mu.
 
 	deadline time.Time
@@ -565,6 +564,13 @@ func (c *timerCtx) cancel(removeFromParent bool, err, cause error) {
 //	}
 func WithTimeout(parent Context, timeout time.Duration) (Context, CancelFunc) {
 	return WithDeadline(parent, time.Now().Add(timeout))
+}
+
+// WithTimeoutCause behaves like WithTimeout but also sets the cause of the
+// returned Context when the timout expires. The returned CancelFunc does
+// not set the cause.
+func WithTimeoutCause(parent Context, timeout time.Duration, cause error) (Context, CancelFunc) {
+	return WithDeadlineCause(parent, time.Now().Add(timeout), cause)
 }
 
 // WithValue returns a copy of parent in which the value associated with key is
@@ -641,10 +647,10 @@ func value(c Context, key any) any {
 			c = ctx.Context
 		case *timerCtx:
 			if key == &cancelCtxKey {
-				return ctx.cancelCtx
+				return &ctx.cancelCtx
 			}
 			c = ctx.Context
-		case *emptyCtx:
+		case backgroundCtx, todoCtx:
 			return nil
 		default:
 			return c.Value(key)

@@ -8,7 +8,6 @@ import (
 	"bufio"
 	"bytes"
 	"debug/macho"
-	"internal/buildcfg"
 	"internal/platform"
 	"internal/testenv"
 	"os"
@@ -17,6 +16,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"cmd/internal/sys"
 )
 
 var AuthorPaidByTheColumnInch struct {
@@ -48,14 +49,15 @@ func main() {}
 `
 
 	tmpdir := t.TempDir()
+	main := filepath.Join(tmpdir, "main.go")
 
-	importcfgfile := filepath.Join(tmpdir, "importcfg")
-	testenv.WriteImportcfg(t, importcfgfile, nil)
-
-	err := os.WriteFile(filepath.Join(tmpdir, "main.go"), []byte(source), 0666)
+	err := os.WriteFile(main, []byte(source), 0666)
 	if err != nil {
 		t.Fatalf("failed to write main.go: %v\n", err)
 	}
+
+	importcfgfile := filepath.Join(tmpdir, "importcfg")
+	testenv.WriteImportcfg(t, importcfgfile, nil, main)
 
 	cmd := testenv.Command(t, testenv.GoToolPath(t), "tool", "compile", "-importcfg="+importcfgfile, "-p=main", "main.go")
 	cmd.Dir = tmpdir
@@ -100,11 +102,10 @@ func TestIssue28429(t *testing.T) {
 		}
 	}
 
-	importcfgfile := filepath.Join(tmpdir, "importcfg")
-	testenv.WriteImportcfg(t, importcfgfile, nil)
-
 	// Compile a main package.
 	write("main.go", "package main; func main() {}")
+	importcfgfile := filepath.Join(tmpdir, "importcfg")
+	testenv.WriteImportcfg(t, importcfgfile, nil, filepath.Join(tmpdir, "main.go"))
 	runGo("tool", "compile", "-importcfg="+importcfgfile, "-p=main", "main.go")
 	runGo("tool", "pack", "c", "main.a", "main.o")
 
@@ -175,19 +176,7 @@ main.x: relocation target main.zero not defined
 func TestIssue33979(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
 	testenv.MustHaveCGO(t)
-	testenv.MustInternalLink(t)
-
-	// Skip test on platforms that do not support cgo internal linking.
-	switch runtime.GOARCH {
-	case "loong64":
-		t.Skipf("Skipping on %s/%s", runtime.GOOS, runtime.GOARCH)
-	case "mips", "mipsle", "mips64", "mips64le":
-		t.Skipf("Skipping on %s/%s", runtime.GOOS, runtime.GOARCH)
-	}
-	if runtime.GOOS == "aix" ||
-		runtime.GOOS == "windows" && runtime.GOARCH == "arm64" {
-		t.Skipf("Skipping on %s/%s", runtime.GOOS, runtime.GOARCH)
-	}
+	testenv.MustInternalLink(t, true)
 
 	t.Parallel()
 
@@ -242,7 +231,7 @@ void foo() {
 	cflags := strings.Fields(runGo("env", "GOGCCFLAGS"))
 
 	importcfgfile := filepath.Join(tmpdir, "importcfg")
-	testenv.WriteImportcfg(t, importcfgfile, nil)
+	testenv.WriteImportcfg(t, importcfgfile, nil, "runtime")
 
 	// Compile, assemble and pack the Go and C code.
 	runGo("tool", "asm", "-p=main", "-gensymabis", "-o", "symabis", "x.s")
@@ -750,8 +739,8 @@ func TestTrampolineCgo(t *testing.T) {
 
 		// Test internal linking mode.
 
-		if runtime.GOARCH == "ppc64" || (runtime.GOARCH == "arm64" && runtime.GOOS == "windows") || !testenv.CanInternalLink() {
-			return // internal linking cgo is not supported
+		if !testenv.CanInternalLink(true) {
+			continue
 		}
 		cmd = testenv.Command(t, testenv.GoToolPath(t), "build", "-buildmode="+mode, "-ldflags=-debugtramp=2 -linkmode=internal", "-o", exe, src)
 		out, err = cmd.CombinedOutput()
@@ -786,10 +775,10 @@ func TestIndexMismatch(t *testing.T) {
 	mObj := filepath.Join(tmpdir, "main.o")
 	exe := filepath.Join(tmpdir, "main.exe")
 
-	importcfgFile := filepath.Join(tmpdir, "stdlib.importcfg")
-	testenv.WriteImportcfg(t, importcfgFile, nil)
+	importcfgFile := filepath.Join(tmpdir, "runtime.importcfg")
+	testenv.WriteImportcfg(t, importcfgFile, nil, "runtime")
 	importcfgWithAFile := filepath.Join(tmpdir, "witha.importcfg")
-	testenv.WriteImportcfg(t, importcfgWithAFile, map[string]string{"a": aObj})
+	testenv.WriteImportcfg(t, importcfgWithAFile, map[string]string{"a": aObj}, "runtime")
 
 	// Build a program with main package importing package a.
 	cmd := testenv.Command(t, testenv.GoToolPath(t), "tool", "compile", "-importcfg="+importcfgFile, "-p=a", "-o", aObj, aSrc)
@@ -1092,7 +1081,7 @@ func TestUnlinkableObj(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
 	t.Parallel()
 
-	if buildcfg.Experiment.Unified {
+	if true /* was buildcfg.Experiment.Unified */ {
 		t.Skip("TODO(mdempsky): Fix ICE when importing unlinkable objects for GOEXPERIMENT=unified")
 	}
 
@@ -1148,5 +1137,48 @@ func TestUnlinkableObj(t *testing.T) {
 	out, err = cmd.CombinedOutput()
 	if err != nil {
 		t.Errorf("link failed: %v. output:\n%s", err, out)
+	}
+}
+
+// TestResponseFile tests that creating a response file to pass to the
+// external linker works correctly.
+func TestResponseFile(t *testing.T) {
+	t.Parallel()
+
+	testenv.MustHaveGoBuild(t)
+
+	// This test requires -linkmode=external. Currently all
+	// systems that support cgo support -linkmode=external.
+	testenv.MustHaveCGO(t)
+
+	tmpdir := t.TempDir()
+
+	src := filepath.Join(tmpdir, "x.go")
+	if err := os.WriteFile(src, []byte(`package main; import "C"; func main() {}`), 0666); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := testenv.Command(t, testenv.GoToolPath(t), "build", "-o", "output", "x.go")
+	cmd.Dir = tmpdir
+
+	// Add enough arguments to push cmd/link into creating a response file.
+	var sb strings.Builder
+	sb.WriteString(`'-ldflags=all="-extldflags=`)
+	for i := 0; i < sys.ExecArgLengthLimit/len("-g"); i++ {
+		if i > 0 {
+			sb.WriteString(" ")
+		}
+		sb.WriteString("-g")
+	}
+	sb.WriteString(`"'`)
+	cmd = testenv.CleanCmdEnv(cmd)
+	cmd.Env = append(cmd.Env, "GOFLAGS="+sb.String())
+
+	out, err := cmd.CombinedOutput()
+	if len(out) > 0 {
+		t.Logf("%s", out)
+	}
+	if err != nil {
+		t.Error(err)
 	}
 }

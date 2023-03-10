@@ -55,9 +55,6 @@ func Init() (*sys.Arch, ld.Arch) {
 		Archreloc:        archreloc,
 		Archrelocvariant: archrelocvariant,
 		Extreloc:         extreloc,
-		Elfreloc1:        elfreloc1,
-		ElfrelocSize:     24,
-		Elfsetupplt:      elfsetupplt,
 		Gentext:          gentext,
 		GenSymsLate:      gensymlate,
 		Machoreloc1:      machoreloc1,
@@ -65,15 +62,21 @@ func Init() (*sys.Arch, ld.Arch) {
 		PEreloc1:         pereloc1,
 		Trampoline:       trampoline,
 
-		Androiddynld:   "/system/bin/linker64",
-		Linuxdynld:     "/lib/ld-linux-aarch64.so.1",
-		LinuxdynldMusl: "/lib/ld-musl-aarch64.so.1",
+		ELF: ld.ELFArch{
+			Androiddynld:   "/system/bin/linker64",
+			Linuxdynld:     "/lib/ld-linux-aarch64.so.1",
+			LinuxdynldMusl: "/lib/ld-musl-aarch64.so.1",
 
-		Freebsddynld:   "/usr/libexec/ld-elf.so.1",
-		Openbsddynld:   "/usr/libexec/ld.so",
-		Netbsddynld:    "/libexec/ld.elf_so",
-		Dragonflydynld: "XXX",
-		Solarisdynld:   "XXX",
+			Freebsddynld:   "/usr/libexec/ld-elf.so.1",
+			Openbsddynld:   "/usr/libexec/ld.so",
+			Netbsddynld:    "/libexec/ld.elf_so",
+			Dragonflydynld: "XXX",
+			Solarisdynld:   "XXX",
+
+			Reloc1:    elfreloc1,
+			RelocSize: 24,
+			SetupPLT:  elfsetupplt,
+		},
 	}
 
 	return arch, theArch

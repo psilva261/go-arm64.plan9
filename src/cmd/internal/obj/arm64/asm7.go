@@ -1012,7 +1012,7 @@ var sysInstFields = map[SpecialOperand]struct {
 	SPOP_CVADP:   {3, 7, 13, 1, true},
 }
 
-// Used for padinng NOOP instruction
+// Used for padding NOOP instruction
 const OP_NOOP = 0xd503201f
 
 // align code to a certain length by padding bytes.
@@ -1267,7 +1267,7 @@ func (c *ctxt7) flushpool(p *obj.Prog) {
 		q := c.newprog()
 		if p.Link == nil {
 			// If p is the last instruction of the function, insert an UNDEF instruction in case the
-			// exection fall through to the pool.
+			// execution fall through to the pool.
 			q.As = obj.AUNDEF
 		} else {
 			// Else insert a branch to the next instruction of p.
@@ -3215,7 +3215,7 @@ func SYSARG4(op1 int, Cn int, Cm int, op2 int) int {
 	return SYSARG5(0, op1, Cn, Cm, op2)
 }
 
-// checkUnpredictable checks if the sourse and transfer registers are the same register.
+// checkUnpredictable checks if the source and transfer registers are the same register.
 // ARM64 manual says it is "constrained unpredictable" if the src and dst registers of STP/LDP are same.
 func (c *ctxt7) checkUnpredictable(p *obj.Prog, isload bool, wback bool, rn int16, rt1 int16, rt2 int16) {
 	if wback && rn != REGSP && (rn == rt1 || rn == rt2) {
@@ -3347,7 +3347,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		if p.To.Type == obj.TYPE_NONE {
 			rt = REGZERO
 		}
-		if r == 0 {
+		if r == obj.REG_NONE {
 			r = rt
 		}
 		o1 |= (uint32(rf&31) << 16) | (uint32(r&31) << 5) | uint32(rt&31)
@@ -3367,7 +3367,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		}
 
 		r := int(p.Reg)
-		if r == 0 {
+		if r == obj.REG_NONE {
 			r = rt
 		}
 		v := int32(c.regoff(&p.From))
@@ -3393,7 +3393,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		r := int(p.Reg)
 		if p.As == AMVN || p.As == AMVNW || isNEGop(p.As) {
 			r = REGZERO
-		} else if r == 0 {
+		} else if r == obj.REG_NONE {
 			r = rt
 		}
 		o1 |= (uint32(r&31) << 5) | uint32(rt&31)
@@ -3402,12 +3402,12 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		rt := int(p.To.Reg)
 		r := int(o.param)
 
-		if r == 0 {
+		if r == obj.REG_NONE {
 			r = REGZERO
 		} else if r == REGFROM {
 			r = int(p.From.Reg)
 		}
-		if r == 0 {
+		if r == obj.REG_NONE {
 			r = REGSP
 		}
 
@@ -3464,7 +3464,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		rt := int(p.To.Reg)
 
 		rf := int(p.Reg)
-		if rf == 0 {
+		if rf == obj.REG_NONE {
 			rf = rt
 		}
 		v := int32(p.From.Offset)
@@ -3502,7 +3502,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		o1 = c.oprrr(p, p.As)
 
 		r := int(p.Reg)
-		if r == 0 {
+		if r == obj.REG_NONE {
 			r = int(p.To.Reg)
 		}
 		o1 |= (uint32(p.From.Reg&31) << 16) | (uint32(r&31) << 5) | uint32(p.To.Reg&31)
@@ -3568,7 +3568,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 			rt = REGZERO
 		}
 		r := int(p.Reg)
-		if r == 0 {
+		if r == obj.REG_NONE {
 			r = rt
 		}
 		if p.To.Type != obj.TYPE_NONE && (p.To.Reg == REGSP || r == REGSP) {
@@ -3618,12 +3618,12 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		if p.From3Type() == obj.TYPE_REG {
 			r = int(p.GetFrom3().Reg)
 			ra = int(p.Reg)
-			if ra == 0 {
+			if ra == obj.REG_NONE {
 				ra = REGZERO
 			}
 		} else {
 			r = int(p.Reg)
-			if r == 0 {
+			if r == obj.REG_NONE {
 				r = rt
 			}
 			ra = REGZERO
@@ -3637,7 +3637,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		rf := int(p.From.Reg)
 		rt := int(p.To.Reg)
 		r := int(p.Reg)
-		if r == 0 {
+		if r == obj.REG_NONE {
 			r = rt
 		}
 		o1 |= (uint32(rf&31) << 16) | (uint32(r&31) << 5) | REGTMP&31
@@ -3654,7 +3654,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		if p.To.Type == obj.TYPE_NONE {
 			rt = REGZERO
 		}
-		if r == 0 {
+		if r == obj.REG_NONE {
 			r = REGZERO
 		}
 		o1 |= (uint32(rf&31) << 16) | (uint32(r&31) << 5) | uint32(rt&31)
@@ -3673,7 +3673,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		var rf int = r
 		if p.From3Type() == obj.TYPE_NONE {
 			/* CINC/CINV/CNEG or CSET/CSETM*/
-			if r == 0 {
+			if r == obj.REG_NONE {
 				/* CSET/CSETM */
 				rf = REGZERO
 				r = rf
@@ -3710,31 +3710,31 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		v := int32(c.regoff(&p.To))
 		sz := int32(1 << uint(movesize(p.As)))
 
-		r := int(p.To.Reg)
-		if r == 0 {
-			r = int(o.param)
+		r := p.To.Reg
+		if r == obj.REG_NONE {
+			r = o.param
 		}
 		if v < 0 || v%sz != 0 { /* unscaled 9-bit signed */
-			o1 = c.olsr9s(p, int32(c.opstr(p, p.As)), v, r, int(p.From.Reg))
+			o1 = c.olsr9s(p, int32(c.opstr(p, p.As)), v, int(r), int(p.From.Reg))
 		} else {
 			v = int32(c.offsetshift(p, int64(v), int(o.a4)))
-			o1 = c.olsr12u(p, int32(c.opstr(p, p.As)), v, r, int(p.From.Reg))
+			o1 = c.olsr12u(p, c.opstr(p, p.As), v, r, p.From.Reg)
 		}
 
 	case 21: /* movT O(R),R -> ldrT */
 		v := int32(c.regoff(&p.From))
 		sz := int32(1 << uint(movesize(p.As)))
 
-		r := int(p.From.Reg)
-		if r == 0 {
-			r = int(o.param)
+		r := p.From.Reg
+		if r == obj.REG_NONE {
+			r = o.param
 		}
 		if v < 0 || v%sz != 0 { /* unscaled 9-bit signed */
-			o1 = c.olsr9s(p, int32(c.opldr(p, p.As)), v, r, int(p.To.Reg))
+			o1 = c.olsr9s(p, int32(c.opldr(p, p.As)), v, int(r), int(p.To.Reg))
 		} else {
 			v = int32(c.offsetshift(p, int64(v), int(o.a1)))
 			//print("offset=%lld v=%ld a1=%d\n", instoffset, v, o->a1);
-			o1 = c.olsr12u(p, int32(c.opldr(p, p.As)), v, r, int(p.To.Reg))
+			o1 = c.olsr12u(p, c.opldr(p, p.As), v, r, p.To.Reg)
 		}
 
 	case 22: /* movT (R)O!,R; movT O(R)!, R -> ldrT */
@@ -3776,14 +3776,10 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 	case 24: /* mov/mvn Rs,Rd -> add $0,Rs,Rd or orr Rs,ZR,Rd */
 		rf := int(p.From.Reg)
 		rt := int(p.To.Reg)
-		s := rf == REGSP || rt == REGSP
-		if p.As == AMVN || p.As == AMVNW {
-			if s {
+		if rf == REGSP || rt == REGSP {
+			if p.As == AMVN || p.As == AMVNW {
 				c.ctxt.Diag("illegal SP reference\n%v", p)
 			}
-			o1 = c.oprrr(p, p.As)
-			o1 |= (uint32(rf&31) << 16) | (REGZERO & 31 << 5) | uint32(rt&31)
-		} else if s {
 			o1 = c.opirr(p, p.As)
 			o1 |= (uint32(rf&31) << 5) | uint32(rt&31)
 		} else {
@@ -3822,7 +3818,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 			rt = REGZERO
 		}
 		r := int(p.Reg)
-		if r == 0 {
+		if r == obj.REG_NONE {
 			r = rt
 		}
 		o1 |= (uint32(r&31) << 5) | uint32(rt&31)
@@ -3851,7 +3847,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 			rt = REGZERO
 		}
 		r := int(p.Reg)
-		if r == 0 {
+		if r == obj.REG_NONE {
 			r = rt
 		}
 		o = c.oprrr(p, p.As)
@@ -3896,7 +3892,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		}
 
 		r := int(p.To.Reg)
-		if r == 0 {
+		if r == obj.REG_NONE {
 			r = int(o.param)
 		}
 
@@ -3917,7 +3913,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		}
 
 		o1 = c.oaddi(p, int32(c.opirr(p, AADD)), hi, r, REGTMP)
-		o2 = c.olsr12u(p, int32(c.opstr(p, p.As)), ((v-hi)>>uint(s))&0xFFF, REGTMP, int(p.From.Reg))
+		o2 = c.olsr12u(p, c.opstr(p, p.As), ((v-hi)>>uint(s))&0xFFF, REGTMP, p.From.Reg)
 		break
 
 	storeusepool:
@@ -3940,7 +3936,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		}
 
 		r := int(p.From.Reg)
-		if r == 0 {
+		if r == obj.REG_NONE {
 			r = int(o.param)
 		}
 
@@ -3961,7 +3957,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		}
 
 		o1 = c.oaddi(p, int32(c.opirr(p, AADD)), hi, r, REGTMP)
-		o2 = c.olsr12u(p, int32(c.opldr(p, p.As)), ((v-hi)>>uint(s))&0xFFF, REGTMP, int(p.To.Reg))
+		o2 = c.olsr12u(p, c.opldr(p, p.As), ((v-hi)>>uint(s))&0xFFF, REGTMP, p.To.Reg)
 		break
 
 	loadusepool:
@@ -3997,15 +3993,11 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 
 	case 34: /* mov $lacon,R */
 		o1 = c.omovlit(AMOVD, p, &p.From, REGTMP)
-
-		if o1 == 0 {
-			break
-		}
 		o2 = c.opxrrr(p, AADD, false)
 		o2 |= REGTMP & 31 << 16
 		o2 |= LSL0_64
 		r := int(p.From.Reg)
-		if r == 0 {
+		if r == obj.REG_NONE {
 			r = int(o.param)
 		}
 		o2 |= uint32(r&31) << 5
@@ -4109,7 +4101,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		s := int(p.GetFrom3().Offset)
 		rf := int(p.Reg)
 		rt := int(p.To.Reg)
-		if rf == 0 {
+		if rf == obj.REG_NONE {
 			rf = rt
 		}
 		switch p.As {
@@ -4237,17 +4229,8 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		if rt == REG_RSP {
 			c.ctxt.Diag("illegal destination register: %v\n", p)
 		}
-		if enc, ok := atomicLDADD[p.As]; ok {
-			// for LDADDx-like instructions, rt can't be r31 when field.enc A is 0, A bit is the 23rd bit.
-			if (rt == REGZERO) && (enc&(1<<23) == 0) {
-				c.ctxt.Diag("illegal destination register: %v\n", p)
-			}
-			o1 |= enc
-		} else if enc, ok := atomicSWP[p.As]; ok {
-			o1 |= enc
-		} else {
-			c.ctxt.Diag("invalid atomic instructions: %v\n", p)
-		}
+
+		o1 = atomicLDADD[p.As] | atomicSWP[p.As]
 		o1 |= uint32(rs&31)<<16 | uint32(rb&31)<<5 | uint32(rt&31)
 
 	case 48: /* ADD $C_ADDCON2, Rm, Rd */
@@ -4259,7 +4242,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		}
 		rt := int(p.To.Reg)
 		r := int(p.Reg)
-		if r == 0 {
+		if r == obj.REG_NONE {
 			r = rt
 		}
 		o1 = c.oaddi(p, int32(op), int32(c.regoff(&p.From))&0x000fff, r, rt)
@@ -4297,7 +4280,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 			rt = REGZERO
 		}
 		r := int(p.Reg)
-		if r == 0 {
+		if r == obj.REG_NONE {
 			r = rt
 		}
 		if r == REG_RSP {
@@ -4326,7 +4309,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		if (o1&(0x1F<<24)) == (0x1E<<24) && (o1&(1<<11)) == 0 { /* monadic */
 			r = rf
 			rf = 0
-		} else if r == 0 {
+		} else if r == obj.REG_NONE {
 			r = rt
 		}
 		o1 |= (uint32(rf&31) << 16) | (uint32(r&31) << 5) | uint32(rt&31)
@@ -4452,7 +4435,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 			rt = REGZERO
 		}
 		r := int(p.Reg)
-		if r == 0 {
+		if r == obj.REG_NONE {
 			r = rt
 		}
 		if p.To.Reg == REGSP || r == REGSP {
@@ -4480,11 +4463,11 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		// For unaligned access, fall back to adrp + add + movT R, (REGTMP).
 		if o.size(c.ctxt, p) != 8 {
 			o2 = c.opirr(p, AADD) | REGTMP&31<<5 | REGTMP&31
-			o3 = c.olsr12u(p, int32(c.opstr(p, p.As)), 0, REGTMP, int(p.From.Reg))
+			o3 = c.olsr12u(p, c.opstr(p, p.As), 0, REGTMP, p.From.Reg)
 			rel.Type = objabi.R_ADDRARM64
 			break
 		}
-		o2 = c.olsr12u(p, int32(c.opstr(p, p.As)), 0, REGTMP, int(p.From.Reg))
+		o2 = c.olsr12u(p, c.opstr(p, p.As), 0, REGTMP, p.From.Reg)
 		rel.Type = c.addrRelocType(p)
 
 	case 65: /* movT addr,R -> adrp + movT (REGTMP), R */
@@ -4497,11 +4480,11 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		// For unaligned access, fall back to adrp + add + movT (REGTMP), R.
 		if o.size(c.ctxt, p) != 8 {
 			o2 = c.opirr(p, AADD) | REGTMP&31<<5 | REGTMP&31
-			o3 = c.olsr12u(p, int32(c.opldr(p, p.As)), 0, REGTMP, int(p.To.Reg))
+			o3 = c.olsr12u(p, c.opldr(p, p.As), 0, REGTMP, p.To.Reg)
 			rel.Type = objabi.R_ADDRARM64
 			break
 		}
-		o2 = c.olsr12u(p, int32(c.opldr(p, p.As)), 0, REGTMP, int(p.To.Reg))
+		o2 = c.olsr12u(p, c.opldr(p, p.As), 0, REGTMP, p.To.Reg)
 		rel.Type = c.addrRelocType(p)
 
 	case 66: /* ldp O(R)!, (r1, r2); ldp (R)O!, (r1, r2) */
@@ -4513,7 +4496,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		if r == obj.REG_NONE {
 			c.ctxt.Diag("invalid ldp source: %v\n", p)
 		}
-		o1 |= c.opldpstp(p, o, v, uint32(r), uint32(p.To.Reg), uint32(p.To.Offset), 1)
+		o1 = c.opldpstp(p, o, v, uint32(r), uint32(p.To.Reg), uint32(p.To.Offset), 1)
 
 	case 67: /* stp (r1, r2), O(R)!; stp (r1, r2), (R)O! */
 		r := int(p.To.Reg)
@@ -4555,7 +4538,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 
 	case 70: /* IE model movd $tlsvar, reg -> adrp REGTMP, 0; ldr reg, [REGTMP, #0] + relocs */
 		o1 = ADR(1, 0, REGTMP)
-		o2 = c.olsr12u(p, int32(c.opldr(p, AMOVD)), 0, REGTMP, int(p.To.Reg))
+		o2 = c.olsr12u(p, c.opldr(p, AMOVD), 0, REGTMP, p.To.Reg)
 		rel := obj.Addrel(c.cursym)
 		rel.Off = int32(c.pc)
 		rel.Siz = 8
@@ -4568,7 +4551,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 
 	case 71: /* movd sym@GOT, reg -> adrp REGTMP, #0; ldr reg, [REGTMP, #0] + relocs */
 		o1 = ADR(1, 0, REGTMP)
-		o2 = c.olsr12u(p, int32(c.opldr(p, AMOVD)), 0, REGTMP, int(p.To.Reg))
+		o2 = c.olsr12u(p, c.opldr(p, AMOVD), 0, REGTMP, p.To.Reg)
 		rel := obj.Addrel(c.cursym)
 		rel.Off = int32(c.pc)
 		rel.Siz = 8
@@ -4686,28 +4669,16 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 	case 74:
 		//	add $O, R, Rtmp or sub $O, R, Rtmp
 		//	ldp (Rtmp), (R1, R2)
-		r := int(p.From.Reg)
-		if r == obj.REG_NONE {
-			r = int(o.param)
+		rf := p.From.Reg
+		if rf == obj.REG_NONE {
+			rf = o.param
 		}
-		if r == obj.REG_NONE {
+		if rf == obj.REG_NONE {
 			c.ctxt.Diag("invalid ldp source: %v", p)
 		}
 		v := int32(c.regoff(&p.From))
-
-		if v > 0 {
-			if v > 4095 {
-				c.ctxt.Diag("offset out of range: %v", p)
-			}
-			o1 = c.oaddi(p, int32(c.opirr(p, AADD)), v, r, REGTMP)
-		}
-		if v < 0 {
-			if v < -4095 {
-				c.ctxt.Diag("offset out of range: %v", p)
-			}
-			o1 = c.oaddi(p, int32(c.opirr(p, ASUB)), -v, r, REGTMP)
-		}
-		o2 |= c.opldpstp(p, o, 0, uint32(REGTMP), uint32(p.To.Reg), uint32(p.To.Offset), 1)
+		o1 = c.oaddi12(p, v, REGTMP, rf)
+		o2 = c.opldpstp(p, o, 0, uint32(REGTMP), uint32(p.To.Reg), uint32(p.To.Offset), 1)
 
 	case 75:
 		//	mov $L, Rtmp (from constant pool)
@@ -4728,7 +4699,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		o2 |= (REGTMP & 31) << 16
 		o2 |= uint32(r&31) << 5
 		o2 |= uint32(REGTMP & 31)
-		o3 |= c.opldpstp(p, o, 0, uint32(REGTMP), uint32(p.To.Reg), uint32(p.To.Offset), 1)
+		o3 = c.opldpstp(p, o, 0, uint32(REGTMP), uint32(p.To.Reg), uint32(p.To.Offset), 1)
 
 	case 76:
 		//	add $O, R, Rtmp or sub $O, R, Rtmp
@@ -4736,27 +4707,16 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		if p.From.Reg == REGTMP || p.From.Offset == REGTMP {
 			c.ctxt.Diag("cannot use REGTMP as source: %v", p)
 		}
-		r := int(p.To.Reg)
-		if r == obj.REG_NONE {
-			r = int(o.param)
+		rt := p.To.Reg
+		if rt == obj.REG_NONE {
+			rt = o.param
 		}
-		if r == obj.REG_NONE {
+		if rt == obj.REG_NONE {
 			c.ctxt.Diag("invalid stp destination: %v", p)
 		}
 		v := int32(c.regoff(&p.To))
-		if v > 0 {
-			if v > 4095 {
-				c.ctxt.Diag("offset out of range: %v", p)
-			}
-			o1 = c.oaddi(p, int32(c.opirr(p, AADD)), v, r, REGTMP)
-		}
-		if v < 0 {
-			if v < -4095 {
-				c.ctxt.Diag("offset out of range: %v", p)
-			}
-			o1 = c.oaddi(p, int32(c.opirr(p, ASUB)), -v, r, REGTMP)
-		}
-		o2 |= c.opldpstp(p, o, 0, uint32(REGTMP), uint32(p.From.Reg), uint32(p.From.Offset), 0)
+		o1 = c.oaddi12(p, v, REGTMP, rt)
+		o2 = c.opldpstp(p, o, 0, uint32(REGTMP), uint32(p.From.Reg), uint32(p.From.Offset), 0)
 
 	case 77:
 		//	mov $L, Rtmp (from constant pool)
@@ -4777,7 +4737,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		o2 |= REGTMP & 31 << 16
 		o2 |= uint32(r&31) << 5
 		o2 |= uint32(REGTMP & 31)
-		o3 |= c.opldpstp(p, o, 0, uint32(REGTMP), uint32(p.From.Reg), uint32(p.From.Offset), 0)
+		o3 = c.opldpstp(p, o, 0, uint32(REGTMP), uint32(p.From.Reg), uint32(p.From.Offset), 0)
 
 	case 78: /* vmov R, V.<T>[index] */
 		rf := int(p.From.Reg)
@@ -5082,7 +5042,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		rel.Sym = p.To.Sym
 		rel.Add = p.To.Offset
 		rel.Type = objabi.R_ADDRARM64
-		o3 |= c.opldpstp(p, o, 0, uint32(REGTMP), uint32(p.From.Reg), uint32(p.From.Offset), 0)
+		o3 = c.opldpstp(p, o, 0, uint32(REGTMP), uint32(p.From.Reg), uint32(p.From.Offset), 0)
 
 	case 88: /* ldp addr(SB), (r,r) -> adrp + add + ldp */
 		o1 = ADR(1, 0, REGTMP)
@@ -5093,7 +5053,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		rel.Sym = p.From.Sym
 		rel.Add = p.From.Offset
 		rel.Type = objabi.R_ADDRARM64
-		o3 |= c.opldpstp(p, o, 0, uint32(REGTMP), uint32(p.To.Reg), uint32(p.To.Offset), 1)
+		o3 = c.opldpstp(p, o, 0, uint32(REGTMP), uint32(p.To.Reg), uint32(p.To.Offset), 1)
 
 	case 89: /* vadd/vsub Vm, Vn, Vd */
 		switch p.As {
@@ -5111,7 +5071,7 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		rf := int(p.From.Reg)
 		rt := int(p.To.Reg)
 		r := int(p.Reg)
-		if r == 0 {
+		if r == obj.REG_NONE {
 			r = rt
 		}
 		o1 |= (uint32(rf&31) << 16) | (uint32(r&31) << 5) | uint32(rt&31)
@@ -5675,12 +5635,12 @@ func (c *ctxt7) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		}
 		o1 = c.opirr(p, p.As)
 		if op.hasOperand2 {
-			if p.To.Reg == 0 {
+			if p.To.Reg == obj.REG_NONE {
 				c.ctxt.Diag("missing register at operand 2: %v\n", p)
 			}
 			o1 |= uint32(p.To.Reg & 0x1F)
 		} else {
-			if p.To.Reg != 0 || p.Reg != 0 {
+			if p.To.Reg != obj.REG_NONE || p.Reg != obj.REG_NONE {
 				c.ctxt.Diag("extraneous register at operand 2: %v\n", p)
 			}
 			o1 |= uint32(0x1F)
@@ -6992,15 +6952,15 @@ func (c *ctxt7) opstore(p *obj.Prog, a obj.As) uint32 {
  * load/store register (scaled 12-bit unsigned immediate) C3.3.13
  *	these produce 64-bit values (when there's an option)
  */
-func (c *ctxt7) olsr12u(p *obj.Prog, o int32, v int32, b int, r int) uint32 {
+func (c *ctxt7) olsr12u(p *obj.Prog, o uint32, v int32, b, r int16) uint32 {
 	if v < 0 || v >= (1<<12) {
 		c.ctxt.Diag("offset out of range: %d\n%v", v, p)
 	}
-	o |= (v & 0xFFF) << 10
-	o |= int32(b&31) << 5
-	o |= int32(r & 31)
+	o |= uint32(v&0xFFF) << 10
+	o |= uint32(b&31) << 5
+	o |= uint32(r & 31)
 	o |= 1 << 24
-	return uint32(o)
+	return o
 }
 
 /*
@@ -7152,6 +7112,19 @@ func (c *ctxt7) oaddi(p *obj.Prog, o1 int32, v int32, r int, rt int) uint32 {
 
 	o1 |= ((v & 0xFFF) << 10) | (int32(r&31) << 5) | int32(rt&31)
 	return uint32(o1)
+}
+
+func (c *ctxt7) oaddi12(p *obj.Prog, v int32, rd, rn int16) uint32 {
+	if v < -4095 || v > 4095 {
+		c.ctxt.Diag("%v is not a 12 bit immediate: %v", v, p)
+		return 0
+	}
+	a := AADD
+	if v < 0 {
+		a = ASUB
+		v = -v
+	}
+	return c.oaddi(p, int32(c.opirr(p, a)), v, int(rn), int(rd))
 }
 
 /*

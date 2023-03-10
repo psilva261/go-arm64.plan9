@@ -274,6 +274,25 @@ func PtraceGetRegs(pid int, regsout *Reg) (err error) {
 	return ptrace(PT_GETREGS, pid, uintptr(unsafe.Pointer(regsout)), 0)
 }
 
+func PtraceIO(req int, pid int, offs uintptr, out []byte, countin int) (count int, err error) {
+	ioDesc := PtraceIoDesc{
+		Op:   int32(req),
+		Offs: offs,
+	}
+	if countin > 0 {
+		_ = out[:countin] // check bounds
+		ioDesc.Addr = &out[0]
+	} else if out != nil {
+		ioDesc.Addr = (*byte)(unsafe.Pointer(&_zero))
+	}
+	ioDesc.SetLen(countin)
+
+	// TODO(#58387): It's not actually safe to pass &ioDesc as a uintptr here.
+	// Pass it as an unsafe.Pointer instead.
+	err = ptrace(PT_IO, pid, uintptr(unsafe.Pointer(&ioDesc)), 0)
+	return int(ioDesc.Len), err
+}
+
 func PtraceLwpEvents(pid int, enable int) (err error) {
 	return ptrace(PT_LWP_EVENTS, pid, 0, enable)
 }
@@ -319,6 +338,7 @@ func PtraceSingleStep(pid int) (err error) {
 //sys	Chmod(path string, mode uint32) (err error)
 //sys	Chown(path string, uid int, gid int) (err error)
 //sys	Chroot(path string) (err error)
+//sys	ClockGettime(clockid int32, time *Timespec) (err error)
 //sys	Close(fd int) (err error)
 //sys	Dup(fd int) (nfd int, err error)
 //sys	Dup2(from int, to int) (err error)

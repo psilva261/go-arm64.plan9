@@ -39,6 +39,7 @@ var OpNames = []string{
 	OCALL:             "function call", // not actual syntax
 	OCAP:              "cap",
 	OCASE:             "case",
+	OCLEAR:            "clear",
 	OCLOSE:            "close",
 	OCOMPLEX:          "complex",
 	OBITNOT:           "^",
@@ -182,6 +183,7 @@ var OpPrec = []int{
 	OCALLMETH:         8,
 	OCALL:             8,
 	OCAP:              8,
+	OCLEAR:            8,
 	OCLOSE:            8,
 	OCOMPLIT:          8,
 	OCONVIFACE:        8,
@@ -415,6 +417,9 @@ func stmtFmt(n Node, s fmt.State) {
 		}
 
 		fmt.Fprint(s, "for")
+		if n.DistinctVars {
+			fmt.Fprint(s, " /* distinct */")
+		}
 		if simpleinit {
 			fmt.Fprintf(s, " %v;", n.Init()[0])
 		} else if n.Post != nil {
@@ -449,6 +454,9 @@ func stmtFmt(n Node, s fmt.State) {
 			fmt.Fprint(s, " =")
 		}
 		fmt.Fprintf(s, " range %v { %v }", n.X, n.Body)
+		if n.DistinctVars {
+			fmt.Fprint(s, " /* distinct vars */")
+		}
 
 	case OSELECT:
 		n := n.(*SelectStmt)
@@ -767,6 +775,7 @@ func exprFmt(n Node, s fmt.State, prec int) {
 	case OREAL,
 		OIMAG,
 		OCAP,
+		OCLEAR,
 		OCLOSE,
 		OLEN,
 		ONEW,

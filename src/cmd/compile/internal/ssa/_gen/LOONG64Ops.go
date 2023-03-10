@@ -163,10 +163,11 @@ func init() {
 		{name: "SUBV", argLength: 2, reg: gp21, asm: "SUBVU"},                      // arg0 - arg1
 		{name: "SUBVconst", argLength: 1, reg: gp11, asm: "SUBVU", aux: "Int64"},   // arg0 - auxInt
 
-		{name: "MULV", argLength: 2, reg: gp22, resultNotInArgs: true, commutative: true, typ: "(Int64,Int64)"},    // arg0 * arg1, signed
-		{name: "MULVU", argLength: 2, reg: gp22, resultNotInArgs: true, commutative: true, typ: "(UInt64,UInt64)"}, // arg0 * arg1, unsigned
-		{name: "DIVV", argLength: 2, reg: gp22, resultNotInArgs: true, typ: "(Int64,Int64)"},                       // arg0 / arg1, signed
-		{name: "DIVVU", argLength: 2, reg: gp22, resultNotInArgs: true, typ: "(UInt64,UInt64)"},                    // arg0 / arg1, unsigned
+		{name: "MULV", argLength: 2, reg: gp21, asm: "MULV", commutative: true, typ: "Int64"},      // arg0 * arg1
+		{name: "MULHV", argLength: 2, reg: gp21, asm: "MULHV", commutative: true, typ: "Int64"},    // (arg0 * arg1) >> 64, signed
+		{name: "MULHVU", argLength: 2, reg: gp21, asm: "MULHVU", commutative: true, typ: "UInt64"}, // (arg0 * arg1) >> 64, unsigned
+		{name: "DIVV", argLength: 2, reg: gp22, resultNotInArgs: true, typ: "(Int64,Int64)"},       // arg0 / arg1, signed
+		{name: "DIVVU", argLength: 2, reg: gp22, resultNotInArgs: true, typ: "(UInt64,UInt64)"},    // arg0 / arg1, unsigned
 
 		{name: "ADDF", argLength: 2, reg: fp21, asm: "ADDF", commutative: true}, // arg0 + arg1
 		{name: "ADDD", argLength: 2, reg: fp21, asm: "ADDD", commutative: true}, // arg0 + arg1
@@ -432,8 +433,8 @@ func init() {
 		// use of R22 (loong64.REGCTXT, the closure pointer)
 		{name: "LoweredGetClosurePtr", reg: regInfo{outputs: []regMask{buildReg("R29")}}, zeroWidth: true},
 
-		// LoweredGetCallerSP returns the SP of the caller of the current function.
-		{name: "LoweredGetCallerSP", reg: gp01, rematerializeable: true},
+		// LoweredGetCallerSP returns the SP of the caller of the current function. arg0=mem.
+		{name: "LoweredGetCallerSP", argLength: 1, reg: gp01, rematerializeable: true},
 
 		// LoweredGetCallerPC evaluates to the PC to which its "caller" will return.
 		// I.e., if f calls g "calls" getcallerpc,
@@ -441,11 +442,12 @@ func init() {
 		// See runtime/stubs.go for a more detailed discussion.
 		{name: "LoweredGetCallerPC", reg: gp01, rematerializeable: true},
 
-		// LoweredWB invokes runtime.gcWriteBarrier. arg0=destptr, arg1=srcptr, arg2=mem, aux=runtime.gcWriteBarrier
+		// LoweredWB invokes runtime.gcWriteBarrier. arg0=mem, auxint=# of buffer entries needed
 		// It saves all GP registers if necessary,
 		// but clobbers R1 (LR) because it's a call
 		// and R30 (REGTMP).
-		{name: "LoweredWB", argLength: 3, reg: regInfo{inputs: []regMask{buildReg("R27"), buildReg("R28")}, clobbers: (callerSave &^ gpg) | buildReg("R1")}, clobberFlags: true, aux: "Sym", symEffect: "None"},
+		// Returns a pointer to a write barrier buffer in R29.
+		{name: "LoweredWB", argLength: 1, reg: regInfo{clobbers: (callerSave &^ gpg) | buildReg("R1"), outputs: []regMask{buildReg("R29")}}, clobberFlags: true, aux: "Int64"},
 
 		// There are three of these functions so that they can have three different register inputs.
 		// When we check 0 <= c <= cap (A), then 0 <= b <= c (B), then 0 <= a <= b (C), we want the

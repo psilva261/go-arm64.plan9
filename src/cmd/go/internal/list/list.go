@@ -52,44 +52,45 @@ syntax of package template. The default output is equivalent
 to -f '{{.ImportPath}}'. The struct being passed to the template is:
 
     type Package struct {
-        Dir           string   // directory containing package sources
-        ImportPath    string   // import path of package in dir
-        ImportComment string   // path in import comment on package statement
-        Name          string   // package name
-        Doc           string   // package documentation string
-        Target        string   // install path
-        Shlib         string   // the shared library that contains this package (only set when -linkshared)
-        Goroot        bool     // is this package in the Go root?
-        Standard      bool     // is this package part of the standard Go library?
-        Stale         bool     // would 'go install' do anything for this package?
-        StaleReason   string   // explanation for Stale==true
-        Root          string   // Go root or Go path dir containing this package
-        ConflictDir   string   // this directory shadows Dir in $GOPATH
-        BinaryOnly    bool     // binary-only package (no longer supported)
-        ForTest       string   // package is only for use in named test
-        Export        string   // file containing export data (when using -export)
-        BuildID       string   // build ID of the compiled package (when using -export)
-        Module        *Module  // info about package's containing module, if any (can be nil)
-        Match         []string // command-line patterns matching this package
-        DepOnly       bool     // package is only a dependency, not explicitly listed
+        Dir            string   // directory containing package sources
+        ImportPath     string   // import path of package in dir
+        ImportComment  string   // path in import comment on package statement
+        Name           string   // package name
+        Doc            string   // package documentation string
+        Target         string   // install path
+        Shlib          string   // the shared library that contains this package (only set when -linkshared)
+        Goroot         bool     // is this package in the Go root?
+        Standard       bool     // is this package part of the standard Go library?
+        Stale          bool     // would 'go install' do anything for this package?
+        StaleReason    string   // explanation for Stale==true
+        Root           string   // Go root or Go path dir containing this package
+        ConflictDir    string   // this directory shadows Dir in $GOPATH
+        BinaryOnly     bool     // binary-only package (no longer supported)
+        ForTest        string   // package is only for use in named test
+        Export         string   // file containing export data (when using -export)
+        BuildID        string   // build ID of the compiled package (when using -export)
+        Module         *Module  // info about package's containing module, if any (can be nil)
+        Match          []string // command-line patterns matching this package
+        DepOnly        bool     // package is only a dependency, not explicitly listed
+        DefaultGODEBUG string  // default GODEBUG setting, for main packages
 
         // Source files
-        GoFiles         []string   // .go source files (excluding CgoFiles, TestGoFiles, XTestGoFiles)
-        CgoFiles        []string   // .go source files that import "C"
-        CompiledGoFiles []string   // .go files presented to compiler (when using -compiled)
-        IgnoredGoFiles  []string   // .go source files ignored due to build constraints
+        GoFiles           []string   // .go source files (excluding CgoFiles, TestGoFiles, XTestGoFiles)
+        CgoFiles          []string   // .go source files that import "C"
+        CompiledGoFiles   []string   // .go files presented to compiler (when using -compiled)
+        IgnoredGoFiles    []string   // .go source files ignored due to build constraints
         IgnoredOtherFiles []string // non-.go source files ignored due to build constraints
-        CFiles          []string   // .c source files
-        CXXFiles        []string   // .cc, .cxx and .cpp source files
-        MFiles          []string   // .m source files
-        HFiles          []string   // .h, .hh, .hpp and .hxx source files
-        FFiles          []string   // .f, .F, .for and .f90 Fortran source files
-        SFiles          []string   // .s source files
-        SwigFiles       []string   // .swig files
-        SwigCXXFiles    []string   // .swigcxx files
-        SysoFiles       []string   // .syso object files to add to archive
-        TestGoFiles     []string   // _test.go files in package
-        XTestGoFiles    []string   // _test.go files outside package
+        CFiles            []string   // .c source files
+        CXXFiles          []string   // .cc, .cxx and .cpp source files
+        MFiles            []string   // .m source files
+        HFiles            []string   // .h, .hh, .hpp and .hxx source files
+        FFiles            []string   // .f, .F, .for and .f90 Fortran source files
+        SFiles            []string   // .s source files
+        SwigFiles         []string   // .swig files
+        SwigCXXFiles      []string   // .swigcxx files
+        SysoFiles         []string   // .syso object files to add to archive
+        TestGoFiles       []string   // _test.go files in package
+        XTestGoFiles      []string   // _test.go files outside package
 
         // Embedded files
         EmbedPatterns      []string // //go:embed patterns
@@ -192,6 +193,8 @@ and the BuildID field to the build ID of the compiled package.
 
 The -find flag causes list to identify the named packages but not
 resolve their dependencies: the Imports and Deps lists will be empty.
+With the -find flag, the -deps, -test and -export commands cannot be
+used.
 
 The -test flag causes list to report not only the named packages
 but also their test binaries (for packages with tests), to convey to
@@ -336,6 +339,9 @@ For more about modules, see https://golang.org/ref/mod.
 func init() {
 	CmdList.Run = runList // break init cycle
 	work.AddBuildFlags(CmdList, work.DefaultBuildFlags)
+	if cfg.Experiment != nil && cfg.Experiment.CoverageRedesign {
+		work.AddCoverFlags(CmdList, nil)
+	}
 	CmdList.Flag.Var(&listJsonFields, "json", "")
 }
 
@@ -442,7 +448,7 @@ func runList(ctx context.Context, cmd *base.Command, args []string) {
 				// Clear all non-requested fields.
 				for i := 0; i < v.NumField(); i++ {
 					if !listJsonFields.needAny(v.Type().Field(i).Name) {
-						v.Field(i).Set(reflect.Zero(v.Type().Field(i).Type))
+						v.Field(i).SetZero()
 					}
 				}
 			}
@@ -588,6 +594,9 @@ func runList(ctx context.Context, cmd *base.Command, args []string) {
 	if *listFind && *listTest {
 		base.Fatalf("go list -test cannot be used with -find")
 	}
+	if *listFind && *listExport {
+		base.Fatalf("go list -export cannot be used with -find")
+	}
 
 	pkgOpts := load.PackageOpts{
 		IgnoreImports:   *listFind,
@@ -599,8 +608,9 @@ func runList(ctx context.Context, cmd *base.Command, args []string) {
 		// for test variants of packages and users who have been providing format strings
 		// might not expect those errors to stop showing up.
 		// See issue #52443.
-		SuppressDeps:      !listJsonFields.needAny("Deps", "DepsErrors"),
-		SuppressBuildInfo: !listJsonFields.needAny("Stale", "StaleReason"),
+		SuppressDeps:       !listJsonFields.needAny("Deps", "DepsErrors"),
+		SuppressBuildInfo:  !listJsonFields.needAny("Stale", "StaleReason"),
+		SuppressEmbedFiles: !listJsonFields.needAny("EmbedFiles", "TestEmbedFiles", "XTestEmbedFiles"),
 	}
 	pkgs := load.PackagesAndErrors(ctx, pkgOpts, args)
 	if !*listE {
@@ -723,19 +733,20 @@ func runList(ctx context.Context, cmd *base.Command, args []string) {
 		}
 	}
 
-	if *listTest {
+	if *listTest || (cfg.BuildPGO == "auto" && len(cmdline) > 1) {
 		all := pkgs
 		if !*listDeps {
 			all = loadPackageList(pkgs)
 		}
 		// Update import paths to distinguish the real package p
-		// from p recompiled for q.test.
+		// from p recompiled for q.test, or to distinguish between
+		// p compiled with different PGO profiles.
 		// This must happen only once the build code is done
 		// looking at import paths, because it will get very confused
 		// if it sees these.
 		old := make(map[string]string)
 		for _, p := range all {
-			if p.ForTest != "" {
+			if p.ForTest != "" || p.Internal.ForMain != "" {
 				new := p.Desc()
 				old[new] = p.ImportPath
 				p.ImportPath = new
@@ -746,7 +757,7 @@ func runList(ctx context.Context, cmd *base.Command, args []string) {
 		m := make(map[string]string)
 		for _, p := range all {
 			for _, p1 := range p.Internal.Imports {
-				if p1.ForTest != "" {
+				if p1.ForTest != "" || p1.Internal.ForMain != "" {
 					m[old[p1.ImportPath]] = p1.ImportPath
 				}
 			}

@@ -546,9 +546,9 @@ func resolveLocalPackage(ctx context.Context, dir string, rs *Requirements) (str
 	pkgNotFoundLongestPrefix := ""
 	for _, mainModule := range MainModules.Versions() {
 		modRoot := MainModules.ModRoot(mainModule)
-		if modRoot != "" && strings.HasPrefix(absDir, modRoot+string(filepath.Separator)) && !strings.Contains(absDir[len(modRoot):], "@") {
-			suffix := filepath.ToSlash(absDir[len(modRoot):])
-			if pkg, found := strings.CutPrefix(suffix, "/vendor/"); found {
+		if modRoot != "" && str.HasFilePathPrefix(absDir, modRoot) && !strings.Contains(absDir[len(modRoot):], "@") {
+			suffix := filepath.ToSlash(str.TrimFilePathPrefix(absDir, modRoot))
+			if pkg, found := strings.CutPrefix(suffix, "vendor/"); found {
 				if cfg.BuildMod != "vendor" {
 					return "", fmt.Errorf("without -mod=vendor, directory %s has no package path", absDir)
 				}
@@ -562,7 +562,7 @@ func resolveLocalPackage(ctx context.Context, dir string, rs *Requirements) (str
 
 			mainModulePrefix := MainModules.PathPrefix(mainModule)
 			if mainModulePrefix == "" {
-				pkg := strings.TrimPrefix(suffix, "/")
+				pkg := suffix
 				if pkg == "builtin" {
 					// "builtin" is a pseudo-package with a real source file.
 					// It's not included in "std", so it shouldn't resolve from "."
@@ -572,7 +572,7 @@ func resolveLocalPackage(ctx context.Context, dir string, rs *Requirements) (str
 				return pkg, nil
 			}
 
-			pkg := mainModulePrefix + suffix
+			pkg := pathpkg.Join(mainModulePrefix, suffix)
 			if _, ok, err := dirInModule(pkg, mainModulePrefix, modRoot, true); err != nil {
 				return "", err
 			} else if !ok {
@@ -749,17 +749,17 @@ func (mms *MainModuleSet) DirImportPath(ctx context.Context, dir string) (path s
 		if dir == modRoot {
 			return mms.PathPrefix(v), v
 		}
-		if strings.HasPrefix(dir, modRoot+string(filepath.Separator)) {
+		if str.HasFilePathPrefix(dir, modRoot) {
 			pathPrefix := MainModules.PathPrefix(v)
 			if pathPrefix > longestPrefix {
 				longestPrefix = pathPrefix
 				longestPrefixVersion = v
-				suffix := filepath.ToSlash(dir[len(modRoot):])
-				if strings.HasPrefix(suffix, "/vendor/") {
-					longestPrefixPath = strings.TrimPrefix(suffix, "/vendor/")
+				suffix := filepath.ToSlash(str.TrimFilePathPrefix(dir, modRoot))
+				if strings.HasPrefix(suffix, "vendor/") {
+					longestPrefixPath = strings.TrimPrefix(suffix, "vendor/")
 					continue
 				}
-				longestPrefixPath = mms.PathPrefix(v) + suffix
+				longestPrefixPath = pathpkg.Join(mms.PathPrefix(v), suffix)
 			}
 		}
 	}
@@ -772,7 +772,7 @@ func (mms *MainModuleSet) DirImportPath(ctx context.Context, dir string) (path s
 
 // PackageModule returns the module providing the package named by the import path.
 func PackageModule(path string) module.Version {
-	pkg, ok := loaded.pkgCache.Get(path).(*loadPkg)
+	pkg, ok := loaded.pkgCache.Get(path)
 	if !ok {
 		return module.Version{}
 	}
@@ -791,7 +791,7 @@ func Lookup(parentPath string, parentIsStd bool, path string) (dir, realPath str
 	if parentIsStd {
 		path = loaded.stdVendor(parentPath, path)
 	}
-	pkg, ok := loaded.pkgCache.Get(path).(*loadPkg)
+	pkg, ok := loaded.pkgCache.Get(path)
 	if !ok {
 		// The loader should have found all the relevant paths.
 		// There are a few exceptions, though:
@@ -827,7 +827,7 @@ type loader struct {
 
 	// reset on each iteration
 	roots    []*loadPkg
-	pkgCache *par.Cache // package path (string) → *loadPkg
+	pkgCache *par.Cache[string, *loadPkg]
 	pkgs     []*loadPkg // transitive closure of loaded packages and tests; populated in buildStacks
 }
 
@@ -850,7 +850,7 @@ func (ld *loader) reset() {
 	}
 
 	ld.roots = nil
-	ld.pkgCache = new(par.Cache)
+	ld.pkgCache = new(par.Cache[string, *loadPkg])
 	ld.pkgs = nil
 }
 
@@ -1504,7 +1504,7 @@ func (ld *loader) pkg(ctx context.Context, path string, flags loadPkgFlags) *loa
 		panic("internal error: (*loader).pkg called with pkgImportsLoaded flag set")
 	}
 
-	pkg := ld.pkgCache.Do(path, func() any {
+	pkg := ld.pkgCache.Do(path, func() *loadPkg {
 		pkg := &loadPkg{
 			path: path,
 		}
@@ -1512,7 +1512,7 @@ func (ld *loader) pkg(ctx context.Context, path string, flags loadPkgFlags) *loa
 
 		ld.work.Add(func() { ld.load(ctx, pkg) })
 		return pkg
-	}).(*loadPkg)
+	})
 
 	ld.applyPkgFlags(ctx, pkg, flags)
 	return pkg
@@ -2214,7 +2214,7 @@ func (pkg *loadPkg) why() string {
 // If there is no reason for the package to be in the current build,
 // Why returns an empty string.
 func Why(path string) string {
-	pkg, ok := loaded.pkgCache.Get(path).(*loadPkg)
+	pkg, ok := loaded.pkgCache.Get(path)
 	if !ok {
 		return ""
 	}
@@ -2226,7 +2226,7 @@ func Why(path string) string {
 // WhyDepth returns 0.
 func WhyDepth(path string) int {
 	n := 0
-	pkg, _ := loaded.pkgCache.Get(path).(*loadPkg)
+	pkg, _ := loaded.pkgCache.Get(path)
 	for p := pkg; p != nil; p = p.stack {
 		n++
 	}

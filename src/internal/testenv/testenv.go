@@ -11,11 +11,11 @@
 package testenv
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
 	"internal/cfg"
-	"internal/goroot"
 	"internal/platform"
 	"os"
 	"os/exec"
@@ -193,27 +193,39 @@ func GOROOT(t testing.TB) string {
 
 // GoTool reports the path to the Go tool.
 func GoTool() (string, error) {
-	if !HasGoBuild() {
-		return "", errors.New("platform cannot run go tool")
-	}
-	var exeSuffix string
-	if runtime.GOOS == "windows" {
-		exeSuffix = ".exe"
-	}
-	goroot, err := findGOROOT()
-	if err != nil {
-		return "", fmt.Errorf("cannot find go tool: %w", err)
-	}
-	path := filepath.Join(goroot, "bin", "go"+exeSuffix)
-	if _, err := os.Stat(path); err == nil {
-		return path, nil
-	}
-	goBin, err := exec.LookPath("go" + exeSuffix)
-	if err != nil {
-		return "", errors.New("cannot find go tool: " + err.Error())
-	}
-	return goBin, nil
+	goToolOnce.Do(func() {
+		goToolPath, goToolErr = func() (string, error) {
+			if !HasGoBuild() {
+				return "", errors.New("platform cannot run go tool")
+			}
+			var exeSuffix string
+			if runtime.GOOS == "windows" {
+				exeSuffix = ".exe"
+			}
+			goroot, err := findGOROOT()
+			if err != nil {
+				return "", fmt.Errorf("cannot find go tool: %w", err)
+			}
+			path := filepath.Join(goroot, "bin", "go"+exeSuffix)
+			if _, err := os.Stat(path); err == nil {
+				return path, nil
+			}
+			goBin, err := exec.LookPath("go" + exeSuffix)
+			if err != nil {
+				return "", errors.New("cannot find go tool: " + err.Error())
+			}
+			return goBin, nil
+		}()
+	})
+
+	return goToolPath, goToolErr
 }
+
+var (
+	goToolOnce sync.Once
+	goToolPath string
+	goToolErr  error
+)
 
 // HasSrc reports whether the entire source tree is available under GOROOT.
 func HasSrc() bool {
@@ -242,31 +254,52 @@ func MustHaveExternalNetwork(t testing.TB) {
 	}
 }
 
-var haveCGO bool
-
 // HasCGO reports whether the current system can use cgo.
 func HasCGO() bool {
-	return haveCGO
+	hasCgoOnce.Do(func() {
+		goTool, err := GoTool()
+		if err != nil {
+			return
+		}
+		cmd := exec.Command(goTool, "env", "CGO_ENABLED")
+		out, err := cmd.Output()
+		if err != nil {
+			panic(fmt.Sprintf("%v: %v", cmd, out))
+		}
+		hasCgo, err = strconv.ParseBool(string(bytes.TrimSpace(out)))
+		if err != nil {
+			panic(fmt.Sprintf("%v: non-boolean output %q", cmd, out))
+		}
+	})
+	return hasCgo
 }
+
+var (
+	hasCgoOnce sync.Once
+	hasCgo     bool
+)
 
 // MustHaveCGO calls t.Skip if cgo is not available.
 func MustHaveCGO(t testing.TB) {
-	if !haveCGO {
+	if !HasCGO() {
 		t.Skipf("skipping test: no cgo")
 	}
 }
 
 // CanInternalLink reports whether the current system can link programs with
 // internal linking.
-func CanInternalLink() bool {
-	return !platform.MustLinkExternal(runtime.GOOS, runtime.GOARCH)
+func CanInternalLink(withCgo bool) bool {
+	return !platform.MustLinkExternal(runtime.GOOS, runtime.GOARCH, withCgo)
 }
 
 // MustInternalLink checks that the current system can link programs with internal
 // linking.
 // If not, MustInternalLink calls t.Skip with an explanation.
-func MustInternalLink(t testing.TB) {
-	if !CanInternalLink() {
+func MustInternalLink(t testing.TB, withCgo bool) {
+	if !CanInternalLink(withCgo) {
+		if withCgo && CanInternalLink(false) {
+			t.Skipf("skipping test: internal linking on %s/%s is not supported with cgo", runtime.GOOS, runtime.GOARCH)
+		}
 		t.Skipf("skipping test: internal linking on %s/%s is not supported", runtime.GOOS, runtime.GOARCH)
 	}
 }
@@ -348,18 +381,45 @@ func SkipIfOptimizationOff(t testing.TB) {
 }
 
 // WriteImportcfg writes an importcfg file used by the compiler or linker to
-// dstPath containing entries for the packages in std and cmd in addition
-// to the package to package file mappings in additionalPackageFiles.
-func WriteImportcfg(t testing.TB, dstPath string, additionalPackageFiles map[string]string) {
-	importcfg, err := goroot.Importcfg()
-	for k, v := range additionalPackageFiles {
-		importcfg += fmt.Sprintf("\npackagefile %s=%s", k, v)
+// dstPath containing entries for the file mappings in packageFiles, as well
+// as for the packages transitively imported by the package(s) in pkgs.
+//
+// pkgs may include any package pattern that is valid to pass to 'go list',
+// so it may also be a list of Go source files all in the same directory.
+func WriteImportcfg(t testing.TB, dstPath string, packageFiles map[string]string, pkgs ...string) {
+	t.Helper()
+
+	icfg := new(bytes.Buffer)
+	icfg.WriteString("# import config\n")
+	for k, v := range packageFiles {
+		fmt.Fprintf(icfg, "packagefile %s=%s\n", k, v)
 	}
-	if err != nil {
-		t.Fatalf("preparing the importcfg failed: %s", err)
+
+	if len(pkgs) > 0 {
+		// Use 'go list' to resolve any missing packages and rewrite the import map.
+		cmd := Command(t, GoToolPath(t), "list", "-export", "-deps", "-f", `{{if ne .ImportPath "command-line-arguments"}}{{if .Export}}{{.ImportPath}}={{.Export}}{{end}}{{end}}`)
+		cmd.Args = append(cmd.Args, pkgs...)
+		cmd.Stderr = new(strings.Builder)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("%v: %v\n%s", cmd, err, cmd.Stderr)
+		}
+
+		for _, line := range strings.Split(string(out), "\n") {
+			if line == "" {
+				continue
+			}
+			importPath, export, ok := strings.Cut(line, "=")
+			if !ok {
+				t.Fatalf("invalid line in output from %v:\n%s", cmd, line)
+			}
+			if packageFiles[importPath] == "" {
+				fmt.Fprintf(icfg, "packagefile %s=%s\n", importPath, export)
+			}
+		}
 	}
-	err = os.WriteFile(dstPath, []byte(importcfg), 0655)
-	if err != nil {
-		t.Fatalf("writing the importcfg failed: %s", err)
+
+	if err := os.WriteFile(dstPath, icfg.Bytes(), 0666); err != nil {
+		t.Fatal(err)
 	}
 }

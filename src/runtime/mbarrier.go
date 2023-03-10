@@ -16,6 +16,7 @@ package runtime
 import (
 	"internal/abi"
 	"internal/goarch"
+	"internal/goexperiment"
 	"unsafe"
 )
 
@@ -169,9 +170,27 @@ func typedmemmove(typ *_type, dst, src unsafe.Pointer) {
 	// barrier, so at worst we've unnecessarily greyed the old
 	// pointer that was in src.
 	memmove(dst, src, typ.size)
-	if writeBarrier.cgo {
-		cgoCheckMemmove(typ, dst, src, 0, typ.size)
+	if goexperiment.CgoCheck2 {
+		cgoCheckMemmove2(typ, dst, src, 0, typ.size)
 	}
+}
+
+// wbZero performs the write barrier operations necessary before
+// zeroing a region of memory at address dst of type typ.
+// Does not actually do the zeroing.
+//go:nowritebarrierrec
+//go:nosplit
+func wbZero(typ *_type, dst unsafe.Pointer) {
+	bulkBarrierPreWrite(uintptr(dst), 0, typ.ptrdata)
+}
+
+// wbMove performs the write barrier operations necessary before
+// copying a region of memory from src to dst of type typ.
+// Does not actually do the copying.
+//go:nowritebarrierrec
+//go:nosplit
+func wbMove(typ *_type, dst, src unsafe.Pointer) {
+	bulkBarrierPreWrite(uintptr(dst), uintptr(src), typ.ptrdata)
 }
 
 //go:linkname reflect_typedmemmove reflect.typedmemmove
@@ -214,8 +233,8 @@ func reflect_typedmemmovepartial(typ *_type, dst, src unsafe.Pointer, off, size 
 	}
 
 	memmove(dst, src, size)
-	if writeBarrier.cgo {
-		cgoCheckMemmove(typ, dst, src, off, size)
+	if goexperiment.CgoCheck2 {
+		cgoCheckMemmove2(typ, dst, src, off, size)
 	}
 }
 
@@ -272,7 +291,7 @@ func typedslicecopy(typ *_type, dstPtr unsafe.Pointer, dstLen int, srcPtr unsafe
 		asanread(srcPtr, uintptr(n)*typ.size)
 	}
 
-	if writeBarrier.cgo {
+	if goexperiment.CgoCheck2 {
 		cgoCheckSliceCopy(typ, dstPtr, srcPtr, n)
 	}
 
@@ -328,6 +347,15 @@ func reflect_typedmemclr(typ *_type, ptr unsafe.Pointer) {
 
 //go:linkname reflect_typedmemclrpartial reflect.typedmemclrpartial
 func reflect_typedmemclrpartial(typ *_type, ptr unsafe.Pointer, off, size uintptr) {
+	if writeBarrier.needed && typ.ptrdata != 0 {
+		bulkBarrierPreWrite(uintptr(ptr), 0, size)
+	}
+	memclrNoHeapPointers(ptr, size)
+}
+
+//go:linkname reflect_typedarrayclear reflect.typedarrayclear
+func reflect_typedarrayclear(typ *_type, ptr unsafe.Pointer, len int) {
+	size := typ.size * uintptr(len)
 	if writeBarrier.needed && typ.ptrdata != 0 {
 		bulkBarrierPreWrite(uintptr(ptr), 0, size)
 	}

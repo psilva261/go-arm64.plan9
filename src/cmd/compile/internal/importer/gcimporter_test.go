@@ -9,7 +9,6 @@ import (
 	"cmd/compile/internal/types2"
 	"fmt"
 	"go/build"
-	"internal/goexperiment"
 	"internal/testenv"
 	"os"
 	"os/exec"
@@ -75,12 +74,8 @@ func testPath(t *testing.T, path, srcDir string) *types2.Package {
 }
 
 func mktmpdir(t *testing.T) string {
-	tmpdir, err := os.MkdirTemp("", "gcimporter_test")
-	if err != nil {
-		t.Fatal("mktmpdir:", err)
-	}
+	tmpdir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(tmpdir, "testdata"), 0700); err != nil {
-		os.RemoveAll(tmpdir)
 		t.Fatal("mktmpdir:", err)
 	}
 	return tmpdir
@@ -98,7 +93,7 @@ func TestImportTestdata(t *testing.T) {
 		"exports.go":  {"go/ast", "go/token"},
 		"generics.go": nil,
 	}
-	if goexperiment.Unified {
+	if true /* was goexperiment.Unified */ {
 		// TODO(mdempsky): Fix test below to flatten the transitive
 		// Package.Imports graph. Unified IR is more precise about
 		// recreating the package import graph.
@@ -107,7 +102,6 @@ func TestImportTestdata(t *testing.T) {
 
 	for testfile, wantImports := range testfiles {
 		tmpdir := mktmpdir(t)
-		defer os.RemoveAll(tmpdir)
 
 		importMap := map[string]string{}
 		for _, pkg := range wantImports {
@@ -150,7 +144,6 @@ func TestVersionHandling(t *testing.T) {
 	}
 
 	tmpdir := mktmpdir(t)
-	defer os.RemoveAll(tmpdir)
 	corruptdir := filepath.Join(tmpdir, "testdata", "versions")
 	if err := os.Mkdir(corruptdir, 0700); err != nil {
 		t.Fatal(err)
@@ -343,8 +336,12 @@ func verifyInterfaceMethodRecvs(t *testing.T, named *types2.Named, level int) {
 	// The unified IR importer always sets interface method receiver
 	// parameters to point to the Interface type, rather than the Named.
 	// See #49906.
+	//
+	// TODO(mdempsky): This is only true for the types2 importer. For
+	// the go/types importer, we duplicate the Interface and rewrite its
+	// receiver methods to match historical behavior.
 	var want types2.Type = named
-	if goexperiment.Unified {
+	if true /* was goexperiment.Unified */ {
 		want = iface
 	}
 
@@ -436,7 +433,6 @@ func TestIssue13566(t *testing.T) {
 	}
 
 	tmpdir := mktmpdir(t)
-	defer os.RemoveAll(tmpdir)
 	testoutdir := filepath.Join(tmpdir, "testdata")
 
 	// b.go needs to be compiled from the output directory so that the compiler can
@@ -527,7 +523,6 @@ func TestIssue15517(t *testing.T) {
 	}
 
 	tmpdir := mktmpdir(t)
-	defer os.RemoveAll(tmpdir)
 
 	compile(t, "testdata", "p.go", filepath.Join(tmpdir, "testdata"), nil)
 
@@ -635,7 +630,6 @@ func importPkg(t *testing.T, path, srcDir string) *types2.Package {
 func compileAndImportPkg(t *testing.T, name string) *types2.Package {
 	t.Helper()
 	tmpdir := mktmpdir(t)
-	defer os.RemoveAll(tmpdir)
 	compile(t, "testdata", name+".go", filepath.Join(tmpdir, "testdata"), nil)
 	return importPkg(t, "./testdata/"+name, tmpdir)
 }

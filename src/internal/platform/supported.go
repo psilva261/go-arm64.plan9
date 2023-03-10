@@ -71,8 +71,39 @@ func FuzzInstrumented(goos, goarch string) bool {
 	}
 }
 
-// MustLinkExternal reports whether goos/goarch requires external linking.
-func MustLinkExternal(goos, goarch string) bool {
+// MustLinkExternal reports whether goos/goarch requires external linking
+// with or without cgo dependencies.
+func MustLinkExternal(goos, goarch string, withCgo bool) bool {
+	if withCgo {
+		switch goarch {
+		case "loong64",
+			"mips", "mipsle", "mips64", "mips64le",
+			"riscv64":
+			// Internally linking cgo is incomplete on some architectures.
+			// https://go.dev/issue/14449
+			return true
+		case "arm64":
+			if goos == "windows" {
+				// windows/arm64 internal linking is not implemented.
+				return true
+			}
+		case "ppc64":
+			// Big Endian PPC64 cgo internal linking is not implemented for aix or linux.
+			// https://go.dev/issue/8912
+			return true
+		}
+
+		switch goos {
+		case "android":
+			return true
+		case "dragonfly":
+			// It seems that on Dragonfly thread local storage is
+			// set up by the dynamic linker, so internal cgo linking
+			// doesn't work. Test case is "go test runtime/cgo".
+			return true
+		}
+	}
+
 	switch goos {
 	case "android":
 		if goarch != "arm64" {
@@ -88,6 +119,7 @@ func MustLinkExternal(goos, goarch string) bool {
 
 // BuildModeSupported reports whether goos/goarch supports the given build mode
 // using the given compiler.
+// There is a copy of this function in cmd/dist/test.go.
 func BuildModeSupported(compiler, buildmode, goos, goarch string) bool {
 	if compiler == "gccgo" {
 		return true
@@ -100,9 +132,28 @@ func BuildModeSupported(compiler, buildmode, goos, goarch string) bool {
 		return true
 
 	case "c-archive":
-		// TODO(bcmills): This seems dubious.
-		// Do we really support c-archive mode on js/wasm‽
-		return platform != "linux/ppc64"
+		switch goos {
+		case "aix", "darwin", "ios", "windows":
+			return true
+		case "linux":
+			switch goarch {
+			case "386", "amd64", "arm", "armbe", "arm64", "arm64be", "ppc64le", "riscv64", "s390x":
+				// linux/ppc64 not supported because it does
+				// not support external linking mode yet.
+				return true
+			default:
+				// Other targets do not support -shared,
+				// per ParseFlags in
+				// cmd/compile/internal/base/flag.go.
+				// For c-archive the Go tool passes -shared,
+				// so that the result is suitable for inclusion
+				// in a PIE or shared library.
+				return false
+			}
+		case "freebsd":
+			return goarch == "amd64"
+		}
+		return false
 
 	case "c-shared":
 		switch platform {
@@ -144,7 +195,7 @@ func BuildModeSupported(compiler, buildmode, goos, goarch string) bool {
 	case "plugin":
 		switch platform {
 		case "linux/amd64", "linux/arm", "linux/arm64", "linux/386", "linux/s390x", "linux/ppc64le",
-			"android/amd64", "android/arm", "android/arm64", "android/386",
+			"android/amd64", "android/386",
 			"darwin/amd64", "darwin/arm64",
 			"freebsd/amd64":
 			return true
@@ -158,10 +209,10 @@ func BuildModeSupported(compiler, buildmode, goos, goarch string) bool {
 
 func InternalLinkPIESupported(goos, goarch string) bool {
 	switch goos + "/" + goarch {
-	case "darwin/amd64", "darwin/arm64",
+	case "android/arm64",
+		"darwin/amd64", "darwin/arm64",
 		"linux/amd64", "linux/arm64", "linux/ppc64le",
-		"android/arm64",
-		"windows-amd64", "windows-386", "windows-arm":
+		"windows/386", "windows/amd64", "windows/arm", "windows/arm64":
 		return true
 	}
 	return false

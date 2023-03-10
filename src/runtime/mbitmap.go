@@ -528,7 +528,7 @@ func (h heapBits) nextFast() (heapBits, uintptr) {
 // make sure the underlying allocation contains pointers, usually
 // by checking typ.ptrdata.
 //
-// Callers must perform cgo checks if writeBarrier.cgo.
+// Callers must perform cgo checks if goexperiment.CgoCheck2.
 //
 //go:nosplit
 func bulkBarrierPreWrite(dst, src, size uintptr) {
@@ -573,9 +573,8 @@ func bulkBarrierPreWrite(dst, src, size uintptr) {
 				break
 			}
 			dstx := (*uintptr)(unsafe.Pointer(addr))
-			if !buf.putFast(*dstx, 0) {
-				wbBufFlush(nil, 0)
-			}
+			p := buf.get1()
+			p[0] = *dstx
 		}
 	} else {
 		for {
@@ -585,9 +584,9 @@ func bulkBarrierPreWrite(dst, src, size uintptr) {
 			}
 			dstx := (*uintptr)(unsafe.Pointer(addr))
 			srcx := (*uintptr)(unsafe.Pointer(src + (addr - dst)))
-			if !buf.putFast(*dstx, *srcx) {
-				wbBufFlush(nil, 0)
-			}
+			p := buf.get2()
+			p[0] = *dstx
+			p[1] = *srcx
 		}
 	}
 }
@@ -617,9 +616,8 @@ func bulkBarrierPreWriteSrcOnly(dst, src, size uintptr) {
 			break
 		}
 		srcx := (*uintptr)(unsafe.Pointer(addr - dst + src))
-		if !buf.putFast(0, *srcx) {
-			wbBufFlush(nil, 0)
-		}
+		p := buf.get1()
+		p[0] = *srcx
 	}
 }
 
@@ -650,14 +648,13 @@ func bulkBarrierBitmap(dst, src, size, maskOffset uintptr, bits *uint8) {
 		if *bits&mask != 0 {
 			dstx := (*uintptr)(unsafe.Pointer(dst + i))
 			if src == 0 {
-				if !buf.putFast(*dstx, 0) {
-					wbBufFlush(nil, 0)
-				}
+				p := buf.get1()
+				p[0] = *dstx
 			} else {
 				srcx := (*uintptr)(unsafe.Pointer(src + i))
-				if !buf.putFast(*dstx, *srcx) {
-					wbBufFlush(nil, 0)
-				}
+				p := buf.get2()
+				p[0] = *dstx
+				p[1] = *srcx
 			}
 		}
 		mask <<= 1
@@ -678,7 +675,7 @@ func bulkBarrierBitmap(dst, src, size, maskOffset uintptr, bits *uint8) {
 // Must not be preempted because it typically runs right before memmove,
 // and the GC must observe them as an atomic action.
 //
-// Callers must perform cgo checks if writeBarrier.cgo.
+// Callers must perform cgo checks if goexperiment.CgoCheck2.
 //
 //go:nosplit
 func typeBitsBulkBarrier(typ *_type, dst, src, size uintptr) {
@@ -709,9 +706,9 @@ func typeBitsBulkBarrier(typ *_type, dst, src, size uintptr) {
 		if bits&1 != 0 {
 			dstx := (*uintptr)(unsafe.Pointer(dst + i))
 			srcx := (*uintptr)(unsafe.Pointer(src + i))
-			if !buf.putFast(*dstx, *srcx) {
-				wbBufFlush(nil, 0)
-			}
+			p := buf.get2()
+			p[0] = *dstx
+			p[1] = *srcx
 		}
 	}
 }

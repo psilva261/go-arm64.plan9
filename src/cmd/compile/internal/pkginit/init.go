@@ -14,6 +14,8 @@ import (
 	"cmd/compile/internal/types"
 	"cmd/internal/obj"
 	"cmd/internal/src"
+	"fmt"
+	"os"
 )
 
 // MakeInit creates a synthetic init function to handle any
@@ -36,10 +38,18 @@ func MakeInit() {
 	}
 	fn.Dcl = append(fn.Dcl, typecheck.InitTodoFunc.Dcl...)
 	typecheck.InitTodoFunc.Dcl = nil
+	fn.SetIsPackageInit(true)
+
+	// Outline (if legal/profitable) global map inits.
+	newfuncs := []*ir.Func{}
+	nf, newfuncs = staticinit.OutlineMapInits(nf)
 
 	// Suppress useless "can inline" diagnostics.
 	// Init functions are only called dynamically.
 	fn.SetInlinabilityChecked(true)
+	for _, nfn := range newfuncs {
+		nfn.SetInlinabilityChecked(true)
+	}
 
 	fn.Body = nf
 	typecheck.FinishFuncBody()
@@ -49,6 +59,16 @@ func MakeInit() {
 		typecheck.Stmts(nf)
 	})
 	typecheck.Target.Decls = append(typecheck.Target.Decls, fn)
+	if base.Debug.WrapGlobalMapDbg > 1 {
+		fmt.Fprintf(os.Stderr, "=-= len(newfuncs) is %d for %v\n",
+			len(newfuncs), fn)
+	}
+	for _, nfn := range newfuncs {
+		if base.Debug.WrapGlobalMapDbg > 1 {
+			fmt.Fprintf(os.Stderr, "=-= add to target.decls %v\n", nfn)
+		}
+		typecheck.Target.Decls = append(typecheck.Target.Decls, ir.Node(nfn))
+	}
 
 	// Prepend to Inits, so it runs first, before any user-declared init
 	// functions.
@@ -75,14 +95,14 @@ func Task() *ir.Name {
 
 	// Find imported packages with init tasks.
 	for _, pkg := range typecheck.Target.Imports {
-		n := typecheck.Resolve(ir.NewIdent(base.Pos, pkg.Lookup(".inittask")))
-		if n.Op() == ir.ONONAME {
+		n, ok := pkg.Lookup(".inittask").Def.(*ir.Name)
+		if !ok {
 			continue
 		}
-		if n.Op() != ir.ONAME || n.(*ir.Name).Class != ir.PEXTERN {
+		if n.Op() != ir.ONAME || n.Class != ir.PEXTERN {
 			base.Fatalf("bad inittask: %v", n)
 		}
-		deps = append(deps, n.(*ir.Name).Linksym())
+		deps = append(deps, n.Linksym())
 	}
 	if base.Flag.ASan {
 		// Make an initialization function to call runtime.asanregisterglobals to register an
@@ -109,21 +129,21 @@ func Task() *ir.Name {
 			name := noder.Renameinit()
 			fnInit := typecheck.DeclFunc(name, nil, nil, nil)
 
-			// Get an array of intrumented global variables.
+			// Get an array of instrumented global variables.
 			globals := instrumentGlobals(fnInit)
 
 			// Call runtime.asanregisterglobals function to poison redzones.
 			// runtime.asanregisterglobals(unsafe.Pointer(&globals[0]), ni)
 			asanf := typecheck.NewName(ir.Pkgs.Runtime.Lookup("asanregisterglobals"))
 			ir.MarkFunc(asanf)
-			asanf.SetType(types.NewSignature(types.NoPkg, nil, nil, []*types.Field{
+			asanf.SetType(types.NewSignature(nil, []*types.Field{
 				types.NewField(base.Pos, nil, types.Types[types.TUNSAFEPTR]),
 				types.NewField(base.Pos, nil, types.Types[types.TUINTPTR]),
 			}, nil))
 			asancall := ir.NewCallExpr(base.Pos, ir.OCALL, asanf, nil)
 			asancall.Args.Append(typecheck.ConvNop(typecheck.NodAddr(
-				ir.NewIndexExpr(base.Pos, globals, ir.NewInt(0))), types.Types[types.TUNSAFEPTR]))
-			asancall.Args.Append(typecheck.ConvNop(ir.NewInt(int64(ni)), types.Types[types.TUINTPTR]))
+				ir.NewIndexExpr(base.Pos, globals, ir.NewInt(base.Pos, 0))), types.Types[types.TUNSAFEPTR]))
+			asancall.Args.Append(typecheck.ConvNop(ir.NewInt(base.Pos, int64(ni)), types.Types[types.TUINTPTR]))
 
 			fnInit.Body.Append(asancall)
 			typecheck.FinishFuncBody()

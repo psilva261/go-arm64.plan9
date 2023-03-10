@@ -670,7 +670,7 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 	case ssa.OpPPC64NEG, ssa.OpPPC64FNEG, ssa.OpPPC64FSQRT, ssa.OpPPC64FSQRTS, ssa.OpPPC64FFLOOR, ssa.OpPPC64FTRUNC, ssa.OpPPC64FCEIL,
 		ssa.OpPPC64FCTIDZ, ssa.OpPPC64FCTIWZ, ssa.OpPPC64FCFID, ssa.OpPPC64FCFIDS, ssa.OpPPC64FRSP, ssa.OpPPC64CNTLZD, ssa.OpPPC64CNTLZW,
 		ssa.OpPPC64POPCNTD, ssa.OpPPC64POPCNTW, ssa.OpPPC64POPCNTB, ssa.OpPPC64MFVSRD, ssa.OpPPC64MTVSRD, ssa.OpPPC64FABS, ssa.OpPPC64FNABS,
-		ssa.OpPPC64FROUND, ssa.OpPPC64CNTTZW, ssa.OpPPC64CNTTZD:
+		ssa.OpPPC64FROUND, ssa.OpPPC64CNTTZW, ssa.OpPPC64CNTTZD, ssa.OpPPC64BRH, ssa.OpPPC64BRW, ssa.OpPPC64BRD:
 		r := v.Reg()
 		p := s.Prog(v.Op.Asm())
 		p.To.Type = obj.TYPE_REG
@@ -963,9 +963,8 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		p.To.Type = obj.TYPE_MEM
 		p.To.Reg = v.Args[0].Reg()
 
-	case ssa.OpPPC64ISEL, ssa.OpPPC64ISELB, ssa.OpPPC64ISELZ:
+	case ssa.OpPPC64ISEL, ssa.OpPPC64ISELZ:
 		// ISEL  AuxInt ? arg0 : arg1
-		// ISELB is a special case of ISEL where AuxInt ? $1 (arg0) : $0.
 		// ISELZ is a special case of ISEL where arg1 is implicitly $0.
 		//
 		// AuxInt value indicates conditions 0=LT 1=GT 2=EQ 3=SO 4=GE 5=LE 6=NE 7=NSO.
@@ -974,24 +973,25 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		//
 		// AuxInt&3 ? arg0 : arg1 for conditions LT, GT, EQ, SO
 		// AuxInt&3 ? arg1 : arg0 for conditions GE, LE, NE, NSO
-		p := s.Prog(ppc64.AISEL)
-		p.To.Type = obj.TYPE_REG
-		p.To.Reg = v.Reg()
-		// For ISELB/ISELZ Use R0 for 0 operand to avoid load.
-		r := obj.Addr{Type: obj.TYPE_REG, Reg: ppc64.REG_R0}
+		p := s.Prog(v.Op.Asm())
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: v.Reg()}
+		p.Reg = v.Args[0].Reg()
+		p.SetFrom3Reg(ppc64.REG_R0)
 		if v.Op == ssa.OpPPC64ISEL {
-			r.Reg = v.Args[1].Reg()
+			p.SetFrom3Reg(v.Args[1].Reg())
 		}
 		// AuxInt values 4,5,6 implemented with reverse operand order from 0,1,2
 		if v.AuxInt > 3 {
-			p.Reg = r.Reg
-			p.SetFrom3Reg(v.Args[0].Reg())
-		} else {
-			p.Reg = v.Args[0].Reg()
-			p.SetFrom3(r)
+			p.Reg, p.GetFrom3().Reg = p.GetFrom3().Reg, p.Reg
 		}
-		p.From.Type = obj.TYPE_CONST
-		p.From.Offset = v.AuxInt & 3
+		p.From.SetConst(v.AuxInt & 3)
+
+	case ssa.OpPPC64SETBC, ssa.OpPPC64SETBCR:
+		p := s.Prog(v.Op.Asm())
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = v.Reg()
+		p.From.Type = obj.TYPE_REG
+		p.From.Reg = int16(ppc64.REG_CR0LT + v.AuxInt)
 
 	case ssa.OpPPC64LoweredQuadZero, ssa.OpPPC64LoweredQuadZeroShort:
 		// The LoweredQuad code generation
@@ -1886,7 +1886,8 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		p := s.Prog(obj.ACALL)
 		p.To.Type = obj.TYPE_MEM
 		p.To.Name = obj.NAME_EXTERN
-		p.To.Sym = v.Aux.(*obj.LSym)
+		// AuxInt encodes how many buffer entries we need.
+		p.To.Sym = ir.Syms.GCWriteBarrier[v.AuxInt-1]
 
 	case ssa.OpPPC64LoweredPanicBoundsA, ssa.OpPPC64LoweredPanicBoundsB, ssa.OpPPC64LoweredPanicBoundsC:
 		p := s.Prog(obj.ACALL)

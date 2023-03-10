@@ -344,6 +344,9 @@ func (w *writer) Sym(s *LSym) {
 	if strings.HasPrefix(s.Name, w.ctxt.Pkgpath) && strings.HasPrefix(s.Name[len(w.ctxt.Pkgpath):], ".") && strings.HasPrefix(s.Name[len(w.ctxt.Pkgpath)+1:], objabi.GlobalDictPrefix) {
 		flag2 |= goobj.SymFlagDict
 	}
+	if s.IsPkgInit() {
+		flag2 |= goobj.SymFlagPkgInit
+	}
 	name := s.Name
 	if strings.HasPrefix(name, "gofile..") {
 		name = filepath.ToSlash(name)
@@ -353,7 +356,7 @@ func (w *writer) Sym(s *LSym) {
 		align = uint32(fn.Align)
 	}
 	if s.ContentAddressable() && s.Size != 0 {
-		// We generally assume data symbols are natually aligned
+		// We generally assume data symbols are naturally aligned
 		// (e.g. integer constants), except for strings and a few
 		// compiler-emitted funcdata. If we dedup a string symbol and
 		// a non-string symbol with the same content, we should keep
@@ -421,7 +424,7 @@ func (w *writer) Hash(s *LSym) {
 // contentHashSection only distinguishes between sets of sections for which this matters.
 // Allowing flexibility increases the effectiveness of content-addressibility.
 // But in some cases, such as doing addressing based on a base symbol,
-// we need to ensure that a symbol is always in a prticular section.
+// we need to ensure that a symbol is always in a particular section.
 // Some of these conditions are duplicated in cmd/link/internal/ld.(*Link).symtab.
 // TODO: instead of duplicating them, have the compiler decide where symbols go.
 func contentHashSection(s *LSym) byte {
@@ -602,7 +605,12 @@ func (w *writer) Aux(s *LSym) {
 		for _, pcSym := range fn.Pcln.Pcdata {
 			w.aux1(goobj.AuxPcdata, pcSym)
 		}
-
+		if fn.WasmImportSym != nil {
+			if fn.WasmImportSym.Size == 0 {
+				panic("wasmimport aux sym must have non-zero size")
+			}
+			w.aux1(goobj.AuxWasmImport, fn.WasmImportSym)
+		}
 	}
 }
 
@@ -700,6 +708,12 @@ func nAuxSym(s *LSym) int {
 			n++
 		}
 		n += len(fn.Pcln.Pcdata)
+		if fn.WasmImport != nil {
+			if fn.WasmImportSym == nil || fn.WasmImportSym.Size == 0 {
+				panic("wasmimport aux sym must exist and have non-zero size")
+			}
+			n++
+		}
 	}
 	return n
 }
@@ -756,8 +770,8 @@ func genFuncInfoSyms(ctxt *Link) {
 		fn.FuncInfoSym = isym
 		b.Reset()
 
-		dwsyms := []*LSym{fn.dwarfRangesSym, fn.dwarfLocSym, fn.dwarfDebugLinesSym, fn.dwarfInfoSym}
-		for _, s := range dwsyms {
+		auxsyms := []*LSym{fn.dwarfRangesSym, fn.dwarfLocSym, fn.dwarfDebugLinesSym, fn.dwarfInfoSym, fn.WasmImportSym}
+		for _, s := range auxsyms {
 			if s == nil || s.Size == 0 {
 				continue
 			}

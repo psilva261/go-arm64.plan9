@@ -1270,7 +1270,7 @@ HaveSpan:
 	// pages not to get touched until we return. Simultaneously, it's important
 	// to do this before calling sysUsed because that may commit address space.
 	bytesToScavenge := uintptr(0)
-	if limit := gcController.memoryLimit.Load(); go119MemoryLimitSupport && !gcCPULimiter.limiting() {
+	if limit := gcController.memoryLimit.Load(); !gcCPULimiter.limiting() {
 		// Assist with scavenging to maintain the memory limit by the amount
 		// that we expect to page in.
 		inuse := gcController.mappedReady.Load()
@@ -1303,7 +1303,7 @@ HaveSpan:
 			}
 		}
 	}
-	// There are a few very limited cirumstances where we won't have a P here.
+	// There are a few very limited circumstances where we won't have a P here.
 	// It's OK to simply skip scavenging in these cases. Something else will notice
 	// and pick up the tab.
 	var now int64

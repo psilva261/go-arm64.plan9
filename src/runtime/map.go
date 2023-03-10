@@ -63,20 +63,21 @@ import (
 
 const (
 	// Maximum number of key/elem pairs a bucket can hold.
-	bucketCntBits = 3
-	bucketCnt     = 1 << bucketCntBits
+	bucketCntBits = abi.MapBucketCountBits
+	bucketCnt     = abi.MapBucketCount
 
-	// Maximum average load of a bucket that triggers growth is 6.5.
+	// Maximum average load of a bucket that triggers growth is bucketCnt*13/16 (about 80% full)
+	// Because of minimum alignment rules, bucketCnt is known to be at least 8.
 	// Represent as loadFactorNum/loadFactorDen, to allow integer math.
-	loadFactorNum = 13
 	loadFactorDen = 2
+	loadFactorNum = (bucketCnt * 13 / 16) * loadFactorDen
 
 	// Maximum key or elem size to keep inline (instead of mallocing per element).
 	// Must fit in a uint8.
 	// Fast versions cannot handle big elems - the cutoff size for
 	// fast versions in cmd/compile/internal/gc/walk.go must be at most this elem.
-	maxKeySize  = 128
-	maxElemSize = 128
+	maxKeySize  = abi.MapMaxKeyBytes
+	maxElemSize = abi.MapMaxElemBytes
 
 	// data offset should be the size of the bmap struct, but needs to be
 	// aligned correctly. For amd64p32 this means 64-bit alignment
@@ -1402,6 +1403,11 @@ func reflect_maplen(h *hmap) int {
 	return h.count
 }
 
+//go:linkname reflect_mapclear reflect.mapclear
+func reflect_mapclear(t *maptype, h *hmap) {
+	mapclear(t, h)
+}
+
 //go:linkname reflectlite_maplen internal/reflectlite.maplen
 func reflectlite_maplen(h *hmap) int {
 	if h == nil {
@@ -1416,3 +1422,10 @@ func reflectlite_maplen(h *hmap) int {
 
 const maxZero = 1024 // must match value in reflect/value.go:maxZero cmd/compile/internal/gc/walk.go:zeroValSize
 var zeroVal [maxZero]byte
+
+// mapinitnoop is a no-op function known the Go linker; if a given global
+// map (of the right size) is determined to be dead, the linker will
+// rewrite the relocation (from the package init func) from the outlined
+// map init function to this symbol. Defined in assembly so as to avoid
+// complications with instrumentation (coverage, etc).
+func mapinitnoop()

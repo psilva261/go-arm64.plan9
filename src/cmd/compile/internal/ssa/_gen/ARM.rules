@@ -248,7 +248,8 @@
 (OffPtr [off] ptr) => (ADDconst [int32(off)] ptr)
 
 (Addr {sym} base) => (MOVWaddr {sym} base)
-(LocalAddr {sym} base _) => (MOVWaddr {sym} base)
+(LocalAddr <t> {sym} base mem) && t.Elem().HasPointers() => (MOVWaddr {sym} (SPanchored base mem))
+(LocalAddr <t> {sym} base _)  && !t.Elem().HasPointers() => (MOVWaddr {sym} base)
 
 // loads
 (Load <t> ptr mem) && t.IsBoolean() => (MOVBUload ptr mem)
@@ -480,7 +481,7 @@
 (MOVHloadidx ptr idx (MOVHstoreidx ptr2 idx x _)) && isSamePtr(ptr, ptr2) => (MOVHreg x)
 
 // fold constant into arithmetic ops
-(ADD x (MOVWconst [c])) => (ADDconst [c] x)
+(ADD x (MOVWconst <t> [c])) && !t.IsPtr() => (ADDconst [c] x)
 (SUB (MOVWconst [c]) x) => (RSBconst [c] x)
 (SUB x (MOVWconst [c])) => (SUBconst [c] x)
 (RSB (MOVWconst [c]) x) => (SUBconst [c] x)

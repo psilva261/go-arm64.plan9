@@ -3700,13 +3700,8 @@ func testTransportClosesBodyOnError(t *testing.T, mode testMode) {
 	if err == nil || !strings.Contains(err.Error(), fakeErr.Error()) {
 		t.Fatalf("Do error = %v; want something containing %q", err, fakeErr.Error())
 	}
-	select {
-	case err := <-readBody:
-		if err == nil {
-			t.Errorf("Unexpected success reading request body from handler; want 'unexpected EOF reading trailer'")
-		}
-	case <-time.After(5 * time.Second):
-		t.Error("timeout waiting for server handler to complete")
+	if err := <-readBody; err == nil {
+		t.Errorf("Unexpected success reading request body from handler; want 'unexpected EOF reading trailer'")
 	}
 	select {
 	case <-didClose:
@@ -4089,6 +4084,45 @@ func testTransportDialCancelRace(t *testing.T, mode testMode) {
 		if err == nil {
 			res.Body.Close()
 		}
+	}
+}
+
+// https://go.dev/issue/49621
+func TestConnClosedBeforeRequestIsWritten(t *testing.T) {
+	run(t, testConnClosedBeforeRequestIsWritten, testNotParallel, []testMode{http1Mode})
+}
+func testConnClosedBeforeRequestIsWritten(t *testing.T, mode testMode) {
+	ts := newClientServerTest(t, mode, HandlerFunc(func(w ResponseWriter, r *Request) {}),
+		func(tr *Transport) {
+			tr.DialContext = func(_ context.Context, network, addr string) (net.Conn, error) {
+				// Connection immediately returns errors.
+				return &funcConn{
+					read: func([]byte) (int, error) {
+						return 0, errors.New("error")
+					},
+					write: func([]byte) (int, error) {
+						return 0, errors.New("error")
+					},
+				}, nil
+			}
+		},
+	).ts
+	// Set a short delay in RoundTrip to give the persistConn time to notice
+	// the connection is broken. We want to exercise the path where writeLoop exits
+	// before it reads the request to send. If this delay is too short, we may instead
+	// exercise the path where writeLoop accepts the request and then fails to write it.
+	// That's fine, so long as we get the desired path often enough.
+	SetEnterRoundTripHook(func() {
+		time.Sleep(1 * time.Millisecond)
+	})
+	defer SetEnterRoundTripHook(nil)
+	var closes int
+	_, err := ts.Client().Post(ts.URL, "text/plain", countCloseReader{&closes, strings.NewReader("hello")})
+	if err == nil {
+		t.Fatalf("expected request to fail, but it did not")
+	}
+	if closes != 1 {
+		t.Errorf("after RoundTrip, request body was closed %v times; want 1", closes)
 	}
 }
 
@@ -4935,7 +4969,7 @@ func testTLSHandshakeTrace(t *testing.T, mode testMode) {
 		t.Fatal("Expected TLSHandshakeStart to be called, but wasn't")
 	}
 	if !done {
-		t.Fatal("Expected TLSHandshakeDone to be called, but wasnt't")
+		t.Fatal("Expected TLSHandshakeDone to be called, but wasn't")
 	}
 }
 

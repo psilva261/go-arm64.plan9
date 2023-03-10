@@ -563,8 +563,7 @@ func (n *SelectorExpr) FuncName() *Name {
 	if n.Selection.Nname != nil {
 		// TODO(austin): Nname is nil for interface method
 		// expressions (I.M), so we can't attach a Func to
-		// those here. reflectdata.methodWrapper generates the
-		// Func.
+		// those here.
 		fn.Func = n.Selection.Nname.(*Name).Func
 	}
 	return fn
@@ -747,7 +746,7 @@ func (n *UnaryExpr) SetOp(op Op) {
 	default:
 		panic(n.no("SetOp " + op.String()))
 	case OBITNOT, ONEG, ONOT, OPLUS, ORECV,
-		OALIGNOF, OCAP, OCLOSE, OIMAG, OLEN, ONEW,
+		OALIGNOF, OCAP, OCLEAR, OCLOSE, OIMAG, OLEN, ONEW,
 		OOFFSETOF, OPANIC, OREAL, OSIZEOF,
 		OCHECKNIL, OCFUNC, OIDATA, OITAB, OSPTR,
 		OUNSAFESTRINGDATA, OUNSAFESLICEDATA:
