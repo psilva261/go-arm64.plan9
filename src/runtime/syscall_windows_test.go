@@ -648,21 +648,25 @@ func TestZeroDivisionException(t *testing.T) {
 }
 
 func TestWERDialogue(t *testing.T) {
-	if os.Getenv("TESTING_WER_DIALOGUE") == "1" {
-		defer os.Exit(0)
-
-		*runtime.TestingWER = true
+	if os.Getenv("TEST_WER_DIALOGUE") == "1" {
 		const EXCEPTION_NONCONTINUABLE = 1
 		mod := syscall.MustLoadDLL("kernel32.dll")
 		proc := mod.MustFindProc("RaiseException")
 		proc.Call(0xbad, EXCEPTION_NONCONTINUABLE, 0, 0)
-		println("RaiseException should not return")
-		return
+		t.Fatal("RaiseException should not return")
 	}
-	cmd := exec.Command(os.Args[0], "-test.run=TestWERDialogue")
-	cmd.Env = []string{"TESTING_WER_DIALOGUE=1"}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := testenv.CleanCmdEnv(testenv.Command(t, exe, "-test.run=TestWERDialogue"))
+	cmd.Env = append(cmd.Env, "TEST_WER_DIALOGUE=1", "GOTRACEBACK=wer")
 	// Child process should not open WER dialogue, but return immediately instead.
-	cmd.CombinedOutput()
+	// The exit code can't be reliably tested here because Windows can change it.
+	_, err = cmd.CombinedOutput()
+	if err == nil {
+		t.Error("test program succeeded unexpectedly")
+	}
 }
 
 func TestWindowsStackMemory(t *testing.T) {

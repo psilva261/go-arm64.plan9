@@ -10,14 +10,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"reflect"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"text/template"
+
+	"golang.org/x/sync/semaphore"
 
 	"cmd/go/internal/base"
 	"cmd/go/internal/cache"
@@ -148,9 +153,9 @@ The template function "context" returns the build context, defined as:
         GOROOT        string   // Go root
         GOPATH        string   // Go path
         CgoEnabled    bool     // whether cgo can be used
-        UseAllFiles   bool     // use files regardless of +build lines, file names
+        UseAllFiles   bool     // use files regardless of //go:build lines, file names
         Compiler      string   // compiler to assume when computing target paths
-        BuildTags     []string // build constraints to match in +build lines
+        BuildTags     []string // build constraints to match in //go:build lines
         ToolTags      []string // toolchain-specific build constraints
         ReleaseTags   []string // releases the current release is compatible with
         InstallSuffix string   // suffix to use in the name of the install dir
@@ -565,11 +570,11 @@ func runList(ctx context.Context, cmd *base.Command, args []string) {
 		if !*listE {
 			for _, m := range mods {
 				if m.Error != nil {
-					base.Errorf("go: %v", m.Error.Err)
+					base.Error(errors.New(m.Error.Err))
 				}
 			}
 			if err != nil {
-				base.Errorf("go: %v", err)
+				base.Error(err)
 			}
 			base.ExitIfErrors()
 		}
@@ -599,18 +604,11 @@ func runList(ctx context.Context, cmd *base.Command, args []string) {
 	}
 
 	pkgOpts := load.PackageOpts{
-		IgnoreImports:   *listFind,
-		ModResolveTests: *listTest,
-		AutoVCS:         true,
-		// SuppressDeps is set if the user opts to explicitly ask for the json fields they
-		// need, don't ask for Deps or DepsErrors. It's not set when using a template string,
-		// even if *listFmt doesn't contain .Deps because Deps are used to find import cycles
-		// for test variants of packages and users who have been providing format strings
-		// might not expect those errors to stop showing up.
-		// See issue #52443.
-		SuppressDeps:       !listJsonFields.needAny("Deps", "DepsErrors"),
-		SuppressBuildInfo:  !listJsonFields.needAny("Stale", "StaleReason"),
-		SuppressEmbedFiles: !listJsonFields.needAny("EmbedFiles", "TestEmbedFiles", "XTestEmbedFiles"),
+		IgnoreImports:      *listFind,
+		ModResolveTests:    *listTest,
+		AutoVCS:            true,
+		SuppressBuildInfo:  !*listExport && !listJsonFields.needAny("Stale", "StaleReason"),
+		SuppressEmbedFiles: !*listExport && !listJsonFields.needAny("EmbedFiles", "TestEmbedFiles", "XTestEmbedFiles"),
 	}
 	pkgs := load.PackagesAndErrors(ctx, pkgOpts, args)
 	if !*listE {
@@ -627,38 +625,46 @@ func runList(ctx context.Context, cmd *base.Command, args []string) {
 		base.ExitIfErrors()
 	}
 
-	if cache.Default() == nil {
-		// These flags return file names pointing into the build cache,
-		// so the build cache must exist.
-		if *listCompiled {
-			base.Fatalf("go list -compiled requires build cache")
-		}
-		if *listExport {
-			base.Fatalf("go list -export requires build cache")
-		}
-		if *listTest {
-			base.Fatalf("go list -test requires build cache")
-		}
-	}
-
 	if *listTest {
 		c := cache.Default()
 		// Add test binaries to packages to be listed.
+
+		var wg sync.WaitGroup
+		sema := semaphore.NewWeighted(int64(runtime.GOMAXPROCS(0)))
+		type testPackageSet struct {
+			p, pmain, ptest, pxtest *load.Package
+		}
+		var testPackages []testPackageSet
 		for _, p := range pkgs {
 			if len(p.TestGoFiles)+len(p.XTestGoFiles) > 0 {
 				var pmain, ptest, pxtest *load.Package
 				var err error
 				if *listE {
-					pmain, ptest, pxtest = load.TestPackagesAndErrors(ctx, pkgOpts, p, nil)
+					sema.Acquire(ctx, 1)
+					wg.Add(1)
+					done := func() {
+						sema.Release(1)
+						wg.Done()
+					}
+					pmain, ptest, pxtest = load.TestPackagesAndErrors(ctx, done, pkgOpts, p, nil)
 				} else {
 					pmain, ptest, pxtest, err = load.TestPackagesFor(ctx, pkgOpts, p, nil)
 					if err != nil {
-						base.Errorf("can't load test package: %s", err)
+						base.Fatalf("go: can't load test package: %s", err)
 					}
 				}
-				if pmain != nil {
-					pkgs = append(pkgs, pmain)
-					data := *pmain.Internal.TestmainGo
+				testPackages = append(testPackages, testPackageSet{p, pmain, ptest, pxtest})
+			}
+		}
+		wg.Wait()
+		for _, pkgset := range testPackages {
+			p, pmain, ptest, pxtest := pkgset.p, pkgset.pmain, pkgset.ptest, pkgset.pxtest
+			if pmain != nil {
+				pkgs = append(pkgs, pmain)
+				data := *pmain.Internal.TestmainGo
+				sema.Acquire(ctx, 1)
+				wg.Add(1)
+				go func() {
 					h := cache.NewHash("testmain")
 					h.Write([]byte("testmain\n"))
 					h.Write(data)
@@ -667,15 +673,20 @@ func runList(ctx context.Context, cmd *base.Command, args []string) {
 						base.Fatalf("%s", err)
 					}
 					pmain.GoFiles[0] = c.OutputFile(out)
-				}
-				if ptest != nil && ptest != p {
-					pkgs = append(pkgs, ptest)
-				}
-				if pxtest != nil {
-					pkgs = append(pkgs, pxtest)
-				}
+					sema.Release(1)
+					wg.Done()
+				}()
+
+			}
+			if ptest != nil && ptest != p {
+				pkgs = append(pkgs, ptest)
+			}
+			if pxtest != nil {
+				pkgs = append(pkgs, pxtest)
 			}
 		}
+
+		wg.Wait()
 	}
 
 	// Remember which packages are named on the command line.
@@ -705,7 +716,7 @@ func runList(ctx context.Context, cmd *base.Command, args []string) {
 		}
 		defer func() {
 			if err := b.Close(); err != nil {
-				base.Fatalf("go: %v", err)
+				base.Fatal(err)
 			}
 		}()
 
@@ -770,20 +781,30 @@ func runList(ctx context.Context, cmd *base.Command, args []string) {
 				delete(m, old)
 			}
 		}
-		// Recompute deps lists using new strings, from the leaves up.
-		for _, p := range all {
-			deps := make(map[string]bool)
-			for _, p1 := range p.Internal.Imports {
-				deps[p1.ImportPath] = true
-				for _, d := range p1.Deps {
-					deps[d] = true
-				}
+	}
+
+	if listJsonFields.needAny("Deps", "DepsErrors") {
+		all := pkgs
+		// Make sure we iterate through packages in a postorder traversal,
+		// which load.PackageList guarantees. If *listDeps, then all is
+		// already in PackageList order. Otherwise, calling load.PackageList
+		// provides the guarantee. In the case of an import cycle, the last package
+		// visited in the cycle, importing the first encountered package in the cycle,
+		// is visited first. The cycle import error will be bubbled up in the traversal
+		// order up to the first package in the cycle, covering all the packages
+		// in the cycle.
+		if !*listDeps {
+			all = load.PackageList(pkgs)
+		}
+		if listJsonFields.needAny("Deps") {
+			for _, p := range all {
+				collectDeps(p)
 			}
-			p.Deps = make([]string, 0, len(deps))
-			for d := range deps {
-				p.Deps = append(p.Deps, d)
+		}
+		if listJsonFields.needAny("DepsErrors") {
+			for _, p := range all {
+				collectDepsErrors(p)
 			}
-			sort.Strings(p.Deps)
 		}
 	}
 
@@ -827,7 +848,7 @@ func runList(ctx context.Context, cmd *base.Command, args []string) {
 			}
 			rmods, err := modload.ListModules(ctx, args, mode, *listReuse)
 			if err != nil && !*listE {
-				base.Errorf("go: %v", err)
+				base.Error(err)
 			}
 			for i, arg := range args {
 				rmod := rmods[i]
@@ -884,6 +905,53 @@ func loadPackageList(roots []*load.Package) []*load.Package {
 	}
 
 	return pkgs
+}
+
+// collectDeps populates p.Deps by iterating over p.Internal.Imports.
+// collectDeps must be called on all of p's Imports before being called on p.
+func collectDeps(p *load.Package) {
+	deps := make(map[string]bool)
+
+	for _, p := range p.Internal.Imports {
+		deps[p.ImportPath] = true
+		for _, q := range p.Deps {
+			deps[q] = true
+		}
+	}
+
+	p.Deps = make([]string, 0, len(deps))
+	for dep := range deps {
+		p.Deps = append(p.Deps, dep)
+	}
+	sort.Strings(p.Deps)
+}
+
+// collectDeps populates p.DepsErrors by iterating over p.Internal.Imports.
+// collectDepsErrors must be called on all of p's Imports before being called on p.
+func collectDepsErrors(p *load.Package) {
+	depsErrors := make(map[*load.PackageError]bool)
+
+	for _, p := range p.Internal.Imports {
+		if p.Error != nil {
+			depsErrors[p.Error] = true
+		}
+		for _, q := range p.DepsErrors {
+			depsErrors[q] = true
+		}
+	}
+
+	p.DepsErrors = make([]*load.PackageError, 0, len(depsErrors))
+	for deperr := range depsErrors {
+		p.DepsErrors = append(p.DepsErrors, deperr)
+	}
+	// Sort packages by the package on the top of the stack, which should be
+	// the package the error was produced for. Each package can have at most
+	// one error set on it.
+	sort.Slice(p.DepsErrors, func(i, j int) bool {
+		stki, stkj := p.DepsErrors[i].ImportStack, p.DepsErrors[j].ImportStack
+		pathi, pathj := stki[len(stki)-1], stkj[len(stkj)-1]
+		return pathi < pathj
+	})
 }
 
 // TrackingWriter tracks the last byte written on every write so

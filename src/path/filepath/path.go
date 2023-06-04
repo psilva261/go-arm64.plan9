@@ -8,7 +8,7 @@
 // The filepath package uses either forward slashes or backslashes,
 // depending on the operating system. To process paths such as URLs
 // that always use forward slashes regardless of the operating
-// system, see the path package.
+// system, see the [path] package.
 package filepath
 
 import (
@@ -552,6 +552,10 @@ func (d *statDirEntry) Name() string               { return d.info.Name() }
 func (d *statDirEntry) IsDir() bool                { return d.info.IsDir() }
 func (d *statDirEntry) Type() fs.FileMode          { return d.info.Mode().Type() }
 func (d *statDirEntry) Info() (fs.FileInfo, error) { return d.info, nil }
+
+func (d *statDirEntry) String() string {
+	return fs.FormatDirEntry(d)
+}
 
 // Walk walks the file tree rooted at root, calling fn for each file or
 // directory in the tree, including root.

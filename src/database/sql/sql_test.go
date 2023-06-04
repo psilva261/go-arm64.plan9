@@ -9,6 +9,8 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"internal/race"
+	"internal/testenv"
 	"math/rand"
 	"reflect"
 	"runtime"
@@ -4383,6 +4385,83 @@ func TestRowsScanProperlyWrapsErrors(t *testing.T) {
 	}
 }
 
+// From go.dev/issue/60304
+func TestContextCancelDuringRawBytesScan(t *testing.T) {
+	db := newTestDB(t, "people")
+	defer closeDB(t, db)
+
+	if _, err := db.Exec("USE_RAWBYTES"); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	r, err := db.QueryContext(ctx, "SELECT|people|name|")
+	if err != nil {
+		t.Fatal(err)
+	}
+	numRows := 0
+	var sink byte
+	for r.Next() {
+		numRows++
+		var s RawBytes
+		err = r.Scan(&s)
+		if !r.closemuScanHold {
+			t.Errorf("expected closemu to be held")
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("read %q", s)
+		if numRows == 2 {
+			cancel() // invalidate the context, which used to call close asynchronously
+		}
+		for _, b := range s { // some operation reading from the raw memory
+			sink += b
+		}
+	}
+	if r.closemuScanHold {
+		t.Errorf("closemu held; should not be")
+	}
+
+	// There are 3 rows. We canceled after reading 2 so we expect either
+	// 2 or 3 depending on how the awaitDone goroutine schedules.
+	switch numRows {
+	case 0, 1:
+		t.Errorf("got %d rows; want 2+", numRows)
+	case 2:
+		if err := r.Err(); err != context.Canceled {
+			t.Errorf("unexpected error: %v (%T)", err, err)
+		}
+	default:
+		// Made it to the end. This is rare, but fine. Permit it.
+	}
+
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestContextCancelBetweenNextAndErr(t *testing.T) {
+	db := newTestDB(t, "people")
+	defer closeDB(t, db)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	r, err := db.QueryContext(ctx, "SELECT|people|name|")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for r.Next() {
+	}
+	cancel()                          // wake up the awaitDone goroutine
+	time.Sleep(10 * time.Millisecond) // increase odds of seeing failure
+	if err := r.Err(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // badConn implements a bad driver.Conn, for TestBadDriver.
 // The Exec method panics.
 type badConn struct{}
@@ -4582,4 +4661,36 @@ func BenchmarkManyConcurrentQueries(b *testing.B) {
 			rows.Close()
 		}
 	})
+}
+
+func TestGrabConnAllocs(t *testing.T) {
+	testenv.SkipIfOptimizationOff(t)
+	if race.Enabled {
+		t.Skip("skipping allocation test when using race detector")
+	}
+	c := new(Conn)
+	ctx := context.Background()
+	n := int(testing.AllocsPerRun(1000, func() {
+		_, release, err := c.grabConn(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		release(nil)
+	}))
+	if n > 0 {
+		t.Fatalf("Conn.grabConn allocated %v objects; want 0", n)
+	}
+}
+
+func BenchmarkGrabConn(b *testing.B) {
+	b.ReportAllocs()
+	c := new(Conn)
+	ctx := context.Background()
+	for i := 0; i < b.N; i++ {
+		_, release, err := c.grabConn(ctx)
+		if err != nil {
+			b.Fatal(err)
+		}
+		release(nil)
+	}
 }

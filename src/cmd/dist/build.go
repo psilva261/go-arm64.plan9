@@ -86,6 +86,7 @@ var okgoos = []string{
 	"illumos",
 	"ios",
 	"js",
+	"wasip1",
 	"linux",
 	"android",
 	"solaris",
@@ -313,6 +314,9 @@ var clangos = []string{
 // compilerEnvLookup returns the compiler settings for goos/goarch in map m.
 // kind is "CC" or "CXX".
 func compilerEnvLookup(kind string, m map[string]string, goos, goarch string) string {
+	if !needCC() {
+		return ""
+	}
 	if cc := m[goos+"/"+goarch]; cc != "" {
 		return cc
 	}
@@ -347,12 +351,40 @@ func chomp(s string) string {
 }
 
 // findgoversion determines the Go version to use in the version string.
+// It also parses any other metadata found in the version file.
 func findgoversion() string {
 	// The $GOROOT/VERSION file takes priority, for distributions
 	// without the source repo.
 	path := pathf("%s/VERSION", goroot)
 	if isfile(path) {
 		b := chomp(readfile(path))
+
+		// Starting in Go 1.21 the VERSION file starts with the
+		// version on a line by itself but then can contain other
+		// metadata about the release, one item per line.
+		if i := strings.Index(b, "\n"); i >= 0 {
+			rest := b[i+1:]
+			b = chomp(b[:i])
+			for _, line := range strings.Split(rest, "\n") {
+				f := strings.Fields(line)
+				if len(f) == 0 {
+					continue
+				}
+				switch f[0] {
+				default:
+					fatalf("VERSION: unexpected line: %s", line)
+				case "time":
+					if len(f) != 2 {
+						fatalf("VERSION: unexpected time line: %s", line)
+					}
+					_, err := time.Parse(time.RFC3339, f[1])
+					if err != nil {
+						fatalf("VERSION: bad time: %s", err)
+					}
+				}
+			}
+		}
+
 		// Commands such as "dist version > VERSION" will cause
 		// the shell to create an empty VERSION file and set dist's
 		// stdout to its fd. dist in turn looks at VERSION and uses
@@ -587,19 +619,22 @@ func mustLinkExternal(goos, goarch string, cgoEnabled bool) bool {
 // exclude files with that prefix.
 // Note that this table applies only to the build of cmd/go,
 // after the main compiler bootstrap.
+// Files listed here should also be listed in ../distpack/pack.go's srcArch.Remove list.
 var deptab = []struct {
 	prefix string   // prefix of target
 	dep    []string // dependency tweaks for targets with that prefix
 }{
 	{"cmd/go/internal/cfg", []string{
 		"zdefaultcc.go",
+	}},
+	{"go/build", []string{
+		"zcgo.go",
+	}},
+	{"internal/platform", []string{
 		"zosarch.go",
 	}},
 	{"runtime/internal/sys", []string{
 		"zversion.go",
-	}},
-	{"go/build", []string{
-		"zcgo.go",
 	}},
 	{"time/tzdata", []string{
 		"zzipdata.go",
@@ -617,10 +652,10 @@ var gentab = []struct {
 	nameprefix string
 	gen        func(string, string)
 }{
+	{"zcgo.go", mkzcgo},
 	{"zdefaultcc.go", mkzdefaultcc},
 	{"zosarch.go", mkzosarch},
 	{"zversion.go", mkzversion},
-	{"zcgo.go", mkzcgo},
 	{"zzipdata.go", mktzdata},
 
 	// not generated anymore, but delete the file if we see it
@@ -1163,6 +1198,7 @@ var cleanlist = []string{
 	"runtime/internal/sys",
 	"cmd/cgo",
 	"cmd/go/internal/cfg",
+	"internal/platform",
 	"go/build",
 }
 
@@ -1202,6 +1238,9 @@ func clean() {
 
 		// Remove cached version info.
 		xremove(pathf("%s/VERSION.cache", goroot))
+
+		// Remove distribution packages.
+		xremoveall(pathf("%s/pkg/distpack", goroot))
 	}
 }
 
@@ -1216,7 +1255,7 @@ func cmdenv() {
 	windows := flag.Bool("w", gohostos == "windows", "emit windows syntax")
 	xflagparse(0)
 
-	format := "%s=\"%s\"\n"
+	format := "%s=\"%s\";\n" // Include ; to separate variables when 'dist env' output is used with eval.
 	switch {
 	case *plan9:
 		format = "%s='%s'\n"
@@ -1263,6 +1302,17 @@ func cmdenv() {
 			sep = ";"
 		}
 		xprintf(format, "PATH", fmt.Sprintf("%s%s%s", gorootBin, sep, os.Getenv("PATH")))
+
+		// Also include $DIST_UNMODIFIED_PATH with the original $PATH
+		// for the internal needs of "dist banner", along with export
+		// so that it reaches the dist process. See its comment below.
+		var exportFormat string
+		if !*windows && !*plan9 {
+			exportFormat = "export " + format
+		} else {
+			exportFormat = format
+		}
+		xprintf(exportFormat, "DIST_UNMODIFIED_PATH", os.Getenv("PATH"))
 	}
 }
 
@@ -1325,7 +1375,7 @@ func toolenv() []string {
 		// Do not include local development, so that people working in the
 		// main branch for day-to-day work on the Go toolchain itself can
 		// still have full paths for stack traces for compiler crashes and the like.
-		env = append(env, "GOFLAGS=-trimpath")
+		env = append(env, "GOFLAGS=-trimpath -ldflags=-w -gcflags=cmd/...=-dwarf=false")
 	}
 	return env
 }
@@ -1343,9 +1393,10 @@ func cmdbootstrap() {
 	timelog("start", "dist bootstrap")
 	defer timelog("end", "dist bootstrap")
 
-	var debug, force, noBanner, noClean bool
+	var debug, distpack, force, noBanner, noClean bool
 	flag.BoolVar(&rebuildall, "a", rebuildall, "rebuild all")
 	flag.BoolVar(&debug, "d", debug, "enable debugging of bootstrap process")
+	flag.BoolVar(&distpack, "distpack", distpack, "write distribution files to pkg/distpack")
 	flag.BoolVar(&force, "force", force, "build even if the port is marked as broken")
 	flag.BoolVar(&noBanner, "no-banner", noBanner, "do not print banner")
 	flag.BoolVar(&noClean, "no-clean", noClean, "print deprecation warning")
@@ -1415,7 +1466,10 @@ func cmdbootstrap() {
 	bootstrapBuildTools()
 
 	// Remember old content of $GOROOT/bin for comparison below.
-	oldBinFiles, _ := filepath.Glob(pathf("%s/bin/*", goroot))
+	oldBinFiles, err := filepath.Glob(pathf("%s/bin/*", goroot))
+	if err != nil {
+		fatalf("glob: %v", err)
+	}
 
 	// For the main bootstrap, building for host os/arch.
 	oldgoos = goos
@@ -1555,7 +1609,11 @@ func cmdbootstrap() {
 
 	// Check that there are no new files in $GOROOT/bin other than
 	// go and gofmt and $GOOS_$GOARCH (target bin when cross-compiling).
-	binFiles, _ := filepath.Glob(pathf("%s/bin/*", goroot))
+	binFiles, err := filepath.Glob(pathf("%s/bin/*", goroot))
+	if err != nil {
+		fatalf("glob: %v", err)
+	}
+
 	ok := map[string]bool{}
 	for _, f := range oldBinFiles {
 		ok[f] = true
@@ -1568,7 +1626,7 @@ func cmdbootstrap() {
 	}
 
 	// Remove go_bootstrap now that we're done.
-	xremove(pathf("%s/go_bootstrap", tooldir))
+	xremove(pathf("%s/go_bootstrap"+exe, tooldir))
 
 	if goos == "android" {
 		// Make sure the exec wrapper will sync a fresh $GOROOT to the device.
@@ -1588,6 +1646,11 @@ func cmdbootstrap() {
 		os.Setenv("CC", oldcc)
 	}
 
+	if distpack {
+		xprintf("Packaging archives for %s/%s.\n", goos, goarch)
+		run("", ShowOutput|CheckExit, pathf("%s/distpack", tooldir))
+	}
+
 	// Print trailing banner unless instructed otherwise.
 	if !noBanner {
 		banner()
@@ -1598,7 +1661,7 @@ func wrapperPathFor(goos, goarch string) string {
 	switch {
 	case goos == "android":
 		if gohostos != "android" {
-			return pathf("%s/misc/android/go_android_exec.go", goroot)
+			return pathf("%s/misc/go_android_exec/main.go", goroot)
 		}
 	case goos == "ios":
 		if gohostos != "ios" {
@@ -1700,6 +1763,7 @@ var cgoEnabled = map[string]bool{
 	"ios/arm64":       true,
 	"ios/amd64":       true,
 	"js/wasm":         false,
+	"wasip1/wasm":     false,
 	"netbsd/386":      true,
 	"netbsd/amd64":    true,
 	"netbsd/arm":      true,
@@ -1709,6 +1773,7 @@ var cgoEnabled = map[string]bool{
 	"openbsd/arm":     true,
 	"openbsd/arm64":   true,
 	"openbsd/mips64":  true,
+	"openbsd/ppc64":   false,
 	"plan9/386":       false,
 	"plan9/amd64":     false,
 	"plan9/arm":       false,
@@ -1725,7 +1790,9 @@ var cgoEnabled = map[string]bool{
 // get filtered out of cgoEnabled for 'dist list'.
 // See go.dev/issue/56679.
 var broken = map[string]bool{
-	"linux/sparc64": true, // An incomplete port. See CL 132155.
+	"linux/sparc64":  true, // An incomplete port. See CL 132155.
+	"openbsd/ppc64":  true, // An incomplete port: go.dev/issue/56001.
+	"openbsd/mips64": true, // Broken: go.dev/issue/58110.
 }
 
 // List of platforms which are first class ports. See go.dev/issue/38874.
@@ -1740,14 +1807,10 @@ var firstClass = map[string]bool{
 	"windows/amd64": true,
 }
 
+// We only need CC if cgo is forced on, or if the platform requires external linking.
+// Otherwise the go command will automatically disable it.
 func needCC() bool {
-	switch os.Getenv("CGO_ENABLED") {
-	case "1":
-		return true
-	case "0":
-		return false
-	}
-	return cgoEnabled[gohostos+"/"+gohostarch]
+	return os.Getenv("CGO_ENABLED") == "1" || mustLinkExternal(gohostos, gohostarch, false)
 }
 
 func checkCC() {
@@ -1849,7 +1912,15 @@ func banner() {
 		if gohostos == "windows" {
 			pathsep = ";"
 		}
-		if !strings.Contains(pathsep+os.Getenv("PATH")+pathsep, pathsep+gorootBin+pathsep) {
+		path := os.Getenv("PATH")
+		if p, ok := os.LookupEnv("DIST_UNMODIFIED_PATH"); ok {
+			// Scripts that modify $PATH and then run dist should also provide
+			// dist with an unmodified copy of $PATH via $DIST_UNMODIFIED_PATH.
+			// Use it here when determining if the user still needs to update
+			// their $PATH. See go.dev/issue/42563.
+			path = p
+		}
+		if !strings.Contains(pathsep+path+pathsep, pathsep+gorootBin+pathsep) {
 			xprintf("*** You need to add %s to your PATH.\n", gorootBin)
 		}
 	}

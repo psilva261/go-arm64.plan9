@@ -42,6 +42,7 @@ import (
 // Boolean values encode as JSON booleans.
 //
 // Floating point, integer, and Number values encode as JSON numbers.
+// NaN and +/-Inf values will return an [UnsupportedValueError].
 //
 // String values encode as JSON strings coerced to valid UTF-8,
 // replacing invalid bytes with the Unicode replacement rune.
@@ -259,10 +260,6 @@ type encodeState struct {
 	ptrSeen  map[any]struct{}
 }
 
-func (e *encodeState) AvailableBuffer() []byte {
-	return availableBuffer(&e.Buffer)
-}
-
 const startDetectingCyclesAfter = 1000
 
 var encodeStatePool sync.Pool
@@ -445,7 +442,7 @@ func marshalerEncoder(e *encodeState, v reflect.Value, opts encOpts) {
 	b, err := m.MarshalJSON()
 	if err == nil {
 		e.Grow(len(b))
-		out := availableBuffer(&e.Buffer)
+		out := e.AvailableBuffer()
 		out, err = appendCompact(out, b, opts.escapeHTML)
 		e.Buffer.Write(out)
 	}
@@ -464,7 +461,7 @@ func addrMarshalerEncoder(e *encodeState, v reflect.Value, opts encOpts) {
 	b, err := m.MarshalJSON()
 	if err == nil {
 		e.Grow(len(b))
-		out := availableBuffer(&e.Buffer)
+		out := e.AvailableBuffer()
 		out, err = appendCompact(out, b, opts.escapeHTML)
 		e.Buffer.Write(out)
 	}

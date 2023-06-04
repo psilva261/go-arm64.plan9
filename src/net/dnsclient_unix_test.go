@@ -1443,7 +1443,7 @@ func TestDNSGoroutineRace(t *testing.T) {
 func lookupWithFake(fake fakeDNSServer, name string, typ dnsmessage.Type) error {
 	r := Resolver{PreferGo: true, Dial: fake.DialContext}
 
-	conf := resolvConf.dnsConfig.Load()
+	conf := getSystemDNSConfig()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1605,7 +1605,7 @@ func TestDNSDialTCP(t *testing.T) {
 	ctx := context.Background()
 	_, _, err := r.exchange(ctx, "0.0.0.0", mustQuestion("com.", dnsmessage.TypeALL, dnsmessage.ClassINET), time.Second, useUDPOrTCP, false)
 	if err != nil {
-		t.Fatal("exhange failed:", err)
+		t.Fatal("exchange failed:", err)
 	}
 }
 

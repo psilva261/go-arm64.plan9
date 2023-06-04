@@ -21,6 +21,10 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 )
 
+// cgoAvailable set to true to indicate that the cgo resolver
+// is available on this system.
+const cgoAvailable = true
+
 // An addrinfoErrno represents a getaddrinfo, getnameinfo-specific
 // error number. It's a signed number and a zero value is a non-error
 // by convention.
@@ -29,6 +33,9 @@ type addrinfoErrno int
 func (eai addrinfoErrno) Error() string   { return _C_gai_strerror(_C_int(eai)) }
 func (eai addrinfoErrno) Temporary() bool { return eai == _C_EAI_AGAIN }
 func (eai addrinfoErrno) Timeout() bool   { return false }
+
+// isAddrinfoErrno is just for testing purposes.
+func (eai addrinfoErrno) isAddrinfoErrno() {}
 
 // doBlockingWithCtx executes a blocking function in a separate goroutine when the provided
 // context is cancellable. It is intended for use with calls that don't support context
@@ -59,15 +66,18 @@ func doBlockingWithCtx[T any](ctx context.Context, blocking func() (T, error)) (
 	}
 }
 
-func cgoLookupHost(ctx context.Context, name string) (hosts []string, err error, completed bool) {
-	addrs, err, completed := cgoLookupIP(ctx, "ip", name)
+func cgoLookupHost(ctx context.Context, name string) (hosts []string, err error) {
+	addrs, err := cgoLookupIP(ctx, "ip", name)
+	if err != nil {
+		return nil, err
+	}
 	for _, addr := range addrs {
 		hosts = append(hosts, addr.String())
 	}
-	return
+	return hosts, nil
 }
 
-func cgoLookupPort(ctx context.Context, network, service string) (port int, err error, completed bool) {
+func cgoLookupPort(ctx context.Context, network, service string) (port int, err error) {
 	var hints _C_struct_addrinfo
 	switch network {
 	case "": // no hints
@@ -78,7 +88,7 @@ func cgoLookupPort(ctx context.Context, network, service string) (port int, err 
 		*_C_ai_socktype(&hints) = _C_SOCK_DGRAM
 		*_C_ai_protocol(&hints) = _C_IPPROTO_UDP
 	default:
-		return 0, &DNSError{Err: "unknown network", Name: network + "/" + service}, true
+		return 0, &DNSError{Err: "unknown network", Name: network + "/" + service}
 	}
 	switch ipVersion(network) {
 	case '4':
@@ -87,15 +97,16 @@ func cgoLookupPort(ctx context.Context, network, service string) (port int, err 
 		*_C_ai_family(&hints) = _C_AF_INET6
 	}
 
-	port, err = doBlockingWithCtx(ctx, func() (int, error) {
+	return doBlockingWithCtx(ctx, func() (int, error) {
 		return cgoLookupServicePort(&hints, network, service)
 	})
-	return port, err, true
 }
 
 func cgoLookupServicePort(hints *_C_struct_addrinfo, network, service string) (port int, err error) {
-	cservice := make([]byte, len(service)+1)
-	copy(cservice, service)
+	cservice, err := syscall.ByteSliceFromString(service)
+	if err != nil {
+		return 0, &DNSError{Err: err.Error(), Name: network + "/" + service}
+	}
 	// Lowercase the C service name.
 	for i, b := range cservice[:len(service)] {
 		cservice[i] = lowerASCII(b)
@@ -147,10 +158,12 @@ func cgoLookupHostIP(network, name string) (addrs []IPAddr, err error) {
 		*_C_ai_family(&hints) = _C_AF_INET6
 	}
 
-	h := make([]byte, len(name)+1)
-	copy(h, name)
+	h, err := syscall.BytePtrFromString(name)
+	if err != nil {
+		return nil, &DNSError{Err: err.Error(), Name: name}
+	}
 	var res *_C_struct_addrinfo
-	gerrno, err := _C_getaddrinfo((*_C_char)(unsafe.Pointer(&h[0])), nil, &hints, &res)
+	gerrno, err := _C_getaddrinfo((*_C_char)(unsafe.Pointer(h)), nil, &hints, &res)
 	if gerrno != 0 {
 		isErrorNoSuchHost := false
 		isTemporary := false
@@ -166,7 +179,7 @@ func cgoLookupHostIP(network, name string) (addrs []IPAddr, err error) {
 				// comes up again. golang.org/issue/6232.
 				err = syscall.EMFILE
 			}
-		case _C_EAI_NONAME:
+		case _C_EAI_NONAME, _C_EAI_NODATA:
 			err = errNoSuchHost
 			isErrorNoSuchHost = true
 		default:
@@ -197,11 +210,10 @@ func cgoLookupHostIP(network, name string) (addrs []IPAddr, err error) {
 	return addrs, nil
 }
 
-func cgoLookupIP(ctx context.Context, network, name string) (addrs []IPAddr, err error, completed bool) {
-	addrs, err = doBlockingWithCtx(ctx, func() ([]IPAddr, error) {
+func cgoLookupIP(ctx context.Context, network, name string) (addrs []IPAddr, err error) {
+	return doBlockingWithCtx(ctx, func() ([]IPAddr, error) {
 		return cgoLookupHostIP(network, name)
 	})
-	return addrs, err, true
 }
 
 // These are roughly enough for the following:
@@ -217,20 +229,19 @@ const (
 	maxNameinfoLen = 4096
 )
 
-func cgoLookupPTR(ctx context.Context, addr string) (names []string, err error, completed bool) {
+func cgoLookupPTR(ctx context.Context, addr string) (names []string, err error) {
 	ip, err := netip.ParseAddr(addr)
 	if err != nil {
-		return nil, &DNSError{Err: "invalid address", Name: addr}, true
+		return nil, &DNSError{Err: "invalid address", Name: addr}
 	}
 	sa, salen := cgoSockaddr(IP(ip.AsSlice()), ip.Zone())
 	if sa == nil {
-		return nil, &DNSError{Err: "invalid address " + ip.String(), Name: addr}, true
+		return nil, &DNSError{Err: "invalid address " + ip.String(), Name: addr}
 	}
 
-	names, err = doBlockingWithCtx(ctx, func() ([]string, error) {
+	return doBlockingWithCtx(ctx, func() ([]string, error) {
 		return cgoLookupAddrPTR(addr, sa, salen)
 	})
-	return names, err, true
 }
 
 func cgoLookupAddrPTR(addr string, sa *_C_struct_sockaddr, salen _C_socklen_t) (names []string, err error) {
@@ -325,12 +336,14 @@ func cgoResSearch(hostname string, rtype, class int) ([]dnsmessage.Resource, err
 	buf := (*_C_uchar)(_C_malloc(uintptr(bufSize)))
 	defer _C_free(unsafe.Pointer(buf))
 
-	s := _C_CString(hostname)
-	defer _C_FreeCString(s)
+	s, err := syscall.BytePtrFromString(hostname)
+	if err != nil {
+		return nil, err
+	}
 
 	var size int
 	for {
-		size, _ = _C_res_nsearch(state, s, class, rtype, buf, bufSize)
+		size, _ = _C_res_nsearch(state, (*_C_char)(unsafe.Pointer(s)), class, rtype, buf, bufSize)
 		if size <= 0 || size > 0xffff {
 			return nil, errors.New("res_nsearch failure")
 		}

@@ -159,6 +159,14 @@ func Main(arch *sys.Arch, theArch Arch) {
 		// dump symbol info on crash
 		defer func() { ctxt.loader.Dump() }()
 	}
+	if ctxt.Debugvlog > 1 {
+		// dump symbol info on error
+		AtExit(func() {
+			if nerrors > 0 {
+				ctxt.loader.Dump()
+			}
+		})
+	}
 
 	switch *flagHeadType {
 	case "":
@@ -267,6 +275,9 @@ func Main(arch *sys.Arch, theArch Arch) {
 	}
 	bench.Start("loadlib")
 	ctxt.loadlib()
+
+	bench.Start("inittasks")
+	ctxt.inittasks()
 
 	bench.Start("deadcode")
 	deadcode(ctxt)

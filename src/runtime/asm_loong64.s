@@ -39,7 +39,7 @@ TEXT runtime·rt0_go(SB),NOSPLIT|TOPFRAME,$0
 nocgo:
 	// update stackguard after _cgo_init
 	MOVV	(g_stack+stack_lo)(g), R19
-	ADDV	$const__StackGuard, R19
+	ADDV	$const_stackGuard, R19
 	MOVV	R19, g_stackguard0(g)
 	MOVV	R19, g_stackguard1(g)
 
@@ -83,8 +83,8 @@ TEXT runtime·asminit(SB),NOSPLIT|NOFRAME,$0-0
 	RET
 
 TEXT runtime·mstart(SB),NOSPLIT|TOPFRAME,$0
-        JAL     runtime·mstart0(SB)
-        RET // not reached
+	JAL     runtime·mstart0(SB)
+	RET // not reached
 
 // func cputicks() int64
 TEXT runtime·cputicks(SB),NOSPLIT,$0-8
@@ -128,7 +128,6 @@ TEXT runtime·mcall(SB), NOSPLIT|NOFRAME, $0-8
 	MOVV	R3, (g_sched+gobuf_sp)(g)
 	MOVV	R1, (g_sched+gobuf_pc)(g)
 	MOVV	R0, (g_sched+gobuf_lr)(g)
-	MOVV	g, (g_sched+gobuf_g)(g)
 
 	// Switch to m->g0 & its stack, call fn.
 	MOVV	g, R19
@@ -186,10 +185,6 @@ switch:
 	MOVV	R5, g
 	JAL	runtime·save_g(SB)
 	MOVV	(g_sched+gobuf_sp)(g), R19
-	// make it look like mstart called systemstack on g0, to stop traceback
-	ADDV	$-8, R19
-	MOVV	$runtime·mstart(SB), R6
-	MOVV	R6, 0(R19)
 	MOVV	R19, R3
 
 	// call target function
@@ -266,6 +261,13 @@ TEXT runtime·morestack(SB),NOSPLIT|NOFRAME,$0-0
 	UNDEF
 
 TEXT runtime·morestack_noctxt(SB),NOSPLIT|NOFRAME,$0-0
+	// Force SPWRITE. This function doesn't actually write SP,
+	// but it is called with a special calling convention where
+	// the caller doesn't save LR on stack but passes it as a
+	// register (R5), and the unwinder currently doesn't understand.
+	// Make it SPWRITE to stop unwinding. (See issue 54332)
+	MOVV    R3, R3
+
 	MOVV	R0, REGCTXT
 	JMP	runtime·morestack(SB)
 
@@ -458,13 +460,23 @@ g0:
 TEXT ·cgocallback(SB),NOSPLIT,$24-24
 	NO_LOCAL_POINTERS
 
+	// Skip cgocallbackg, just dropm when fn is nil, and frame is the saved g.
+	// It is used to dropm while thread is exiting.
+	MOVV    fn+0(FP), R5
+	BNE	R5, loadg
+	// Restore the g from frame.
+	MOVV    frame+8(FP), g
+	JMP	dropm
+
+loadg:
 	// Load m and g from thread-local storage.
 	MOVB	runtime·iscgo(SB), R19
 	BEQ	R19, nocgo
 	JAL	runtime·load_g(SB)
 nocgo:
 
-	// If g is nil, Go did not create the current thread.
+	// If g is nil, Go did not create the current thread,
+	// or if this thread never called into Go on pthread platforms.
 	// Call needm to obtain one for temporary use.
 	// In this case, we're running on the thread stack, so there's
 	// lots of space, but the linker doesn't know. Hide the call from
@@ -477,7 +489,7 @@ nocgo:
 
 needm:
 	MOVV	g, savedm-8(SP) // g is zero, so is m.
-	MOVV	$runtime·needm(SB), R4
+	MOVV	$runtime·needAndBindM(SB), R4
 	JAL	(R4)
 
 	// Set m->sched.sp = SP, so that if a panic happens
@@ -549,10 +561,24 @@ havem:
 	MOVV	savedsp-24(SP), R13 // must match frame size
 	MOVV	R13, (g_sched+gobuf_sp)(g)
 
-	// If the m on entry was nil, we called needm above to borrow an m
-	// for the duration of the call. Since the call is over, return it with dropm.
+	// If the m on entry was nil, we called needm above to borrow an m,
+	// 1. for the duration of the call on non-pthread platforms,
+	// 2. or the duration of the C thread alive on pthread platforms.
+	// If the m on entry wasn't nil,
+	// 1. the thread might be a Go thread,
+	// 2. or it's wasn't the first call from a C thread on pthread platforms,
+	//    since the we skip dropm to resue the m in the first call.
 	MOVV	savedm-8(SP), R12
 	BNE	R12, droppedm
+
+	// Skip dropm to reuse it in the next call, when a pthread key has been created.
+	MOVV	_cgo_pthread_key_created(SB), R12
+	// It means cgo is disabled when _cgo_pthread_key_created is a nil pointer, need dropm.
+	BEQ	R12, dropm
+	MOVV    (R12), R12
+	BNE	R12, droppedm
+
+dropm:
 	MOVV	$runtime·dropm(SB), R4
 	JAL	(R4)
 droppedm:
@@ -611,10 +637,10 @@ TEXT _cgo_topofstack(SB),NOSPLIT,$16
 // The top-most function running on a goroutine
 // returns to goexit+PCQuantum.
 TEXT runtime·goexit(SB),NOSPLIT|NOFRAME|TOPFRAME,$0-0
-	NOR	R0, R0	// NOP
+	NOOP
 	JAL	runtime·goexit1(SB)	// does not return
 	// traceback from goexit1 must hit code range of goexit
-	NOR	R0, R0	// NOP
+	NOOP
 
 TEXT ·checkASM(SB),NOSPLIT,$0-1
 	MOVW	$1, R19

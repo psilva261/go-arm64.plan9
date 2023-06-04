@@ -19,6 +19,7 @@ const (
 	_C_AF_UNSPEC    = syscall.AF_UNSPEC
 	_C_EAI_AGAIN    = unix.EAI_AGAIN
 	_C_EAI_NONAME   = unix.EAI_NONAME
+	_C_EAI_NODATA   = unix.EAI_NODATA
 	_C_EAI_OVERFLOW = unix.EAI_OVERFLOW
 	_C_EAI_SYSTEM   = unix.EAI_SYSTEM
 	_C_IPPROTO_TCP  = syscall.IPPROTO_TCP
@@ -42,14 +43,7 @@ func _C_GoString(p *_C_char) string {
 	return unix.GoString(p)
 }
 
-func _C_CString(s string) *_C_char {
-	p := make([]byte, len(s)+1)
-	copy(p, s)
-	return &p[0]
-}
-
-func _C_FreeCString(p *_C_char) { _C_free(unsafe.Pointer(p)) }
-func _C_free(p unsafe.Pointer)  { runtime.KeepAlive(p) }
+func _C_free(p unsafe.Pointer) { runtime.KeepAlive(p) }
 
 func _C_malloc(n uintptr) unsafe.Pointer {
 	if n <= 0 {

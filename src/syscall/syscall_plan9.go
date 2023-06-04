@@ -12,6 +12,7 @@
 package syscall
 
 import (
+	"errors"
 	"internal/oserror"
 	"runtime"
 	"unsafe"
@@ -22,8 +23,8 @@ const bitSize16 = 2
 
 // ErrorString implements Error's String method by returning itself.
 //
-// ErrorString values can be tested against error values from the os package
-// using errors.Is. For example:
+// ErrorString values can be tested against error values using errors.Is.
+// For example:
 //
 //	_, _, err := syscall.Syscall(...)
 //	if errors.Is(err, fs.ErrNotExist) ...
@@ -43,6 +44,8 @@ func (e ErrorString) Is(target error) bool {
 	case oserror.ErrNotExist:
 		return checkErrMessageContent(e, "does not exist", "not found",
 			"has been removed", "no parent")
+	case errors.ErrUnsupported:
+		return checkErrMessageContent(e, "not supported")
 	}
 	return false
 }

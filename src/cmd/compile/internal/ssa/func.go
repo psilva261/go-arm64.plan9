@@ -773,8 +773,7 @@ func (f *Func) DebugHashMatch() bool {
 	if !base.HasDebugHash() {
 		return true
 	}
-	name := f.fe.MyImportPath() + "." + f.Name
-	return base.DebugHashMatch(name)
+	return base.DebugHashMatchPkgFunc(f.fe.MyImportPath(), f.Name)
 }
 
 func (f *Func) spSb() (sp, sb *Value) {
@@ -808,6 +807,5 @@ func (f *Func) useFMA(v *Value) bool {
 	if base.FmaHash == nil {
 		return true
 	}
-	ctxt := v.Block.Func.Config.Ctxt()
-	return base.FmaHash.DebugHashMatchPos(ctxt, v.Pos)
+	return base.FmaHash.MatchPos(v.Pos, nil)
 }

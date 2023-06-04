@@ -41,6 +41,7 @@ func TestIssue21703(t *testing.T) {
 	t.Parallel()
 
 	testenv.MustHaveGoBuild(t)
+	testenv.MustInternalLink(t, false)
 
 	const source = `
 package main
@@ -70,6 +71,9 @@ func main() {}
 	cmd.Dir = tmpdir
 	out, err = cmd.CombinedOutput()
 	if err != nil {
+		if runtime.GOOS == "android" && runtime.GOARCH == "arm64" {
+			testenv.SkipFlaky(t, 58806)
+		}
 		t.Fatalf("failed to link main.o: %v, output: %s\n", err, out)
 	}
 }
@@ -82,6 +86,7 @@ func TestIssue28429(t *testing.T) {
 	t.Parallel()
 
 	testenv.MustHaveGoBuild(t)
+	testenv.MustInternalLink(t, false)
 
 	tmpdir := t.TempDir()
 
@@ -97,6 +102,9 @@ func TestIssue28429(t *testing.T) {
 		cmd.Dir = tmpdir
 		out, err := cmd.CombinedOutput()
 		if err != nil {
+			if len(args) >= 2 && args[1] == "link" && runtime.GOOS == "android" && runtime.GOARCH == "arm64" {
+				testenv.SkipFlaky(t, 58806)
+			}
 			t.Fatalf("'go %s' failed: %v, output: %s",
 				strings.Join(args, " "), err, out)
 		}
@@ -559,7 +567,8 @@ func main() {
 }
 `
 
-const testFuncAlignAsmSrc = `
+var testFuncAlignAsmSources = map[string]string{
+	"arm64": `
 #include "textflag.h"
 
 TEXT	·alignPc(SB),NOSPLIT, $0-0
@@ -570,13 +579,27 @@ TEXT	·alignPc(SB),NOSPLIT, $0-0
 
 GLOBL	·alignPcFnAddr(SB),RODATA,$8
 DATA	·alignPcFnAddr(SB)/8,$·alignPc(SB)
-`
+`,
+	"loong64": `
+#include "textflag.h"
+
+TEXT	·alignPc(SB),NOSPLIT, $0-0
+	MOVV	$2, R4
+	PCALIGN	$512
+	MOVV	$3, R5
+	RET
+
+GLOBL	·alignPcFnAddr(SB),RODATA,$8
+DATA	·alignPcFnAddr(SB)/8,$·alignPc(SB)
+`,
+}
 
 // TestFuncAlign verifies that the address of a function can be aligned
-// with a specific value on arm64.
+// with a specific value on arm64 and loong64.
 func TestFuncAlign(t *testing.T) {
-	if runtime.GOARCH != "arm64" || runtime.GOOS != "linux" {
-		t.Skip("skipping on non-linux/arm64 platform")
+	testFuncAlignAsmSrc := testFuncAlignAsmSources[runtime.GOARCH]
+	if len(testFuncAlignAsmSrc) == 0 || runtime.GOOS != "linux" {
+		t.Skip("skipping on non-linux/{arm64,loong64} platform")
 	}
 	testenv.MustHaveGoBuild(t)
 
@@ -763,6 +786,7 @@ func TestIndexMismatch(t *testing.T) {
 	// This shouldn't happen with "go build". We invoke the compiler and the linker
 	// manually, and try to "trick" the linker with an inconsistent object file.
 	testenv.MustHaveGoBuild(t)
+	testenv.MustInternalLink(t, false)
 
 	t.Parallel()
 
@@ -797,6 +821,9 @@ func TestIndexMismatch(t *testing.T) {
 	t.Log(cmd)
 	out, err = cmd.CombinedOutput()
 	if err != nil {
+		if runtime.GOOS == "android" && runtime.GOARCH == "arm64" {
+			testenv.SkipFlaky(t, 58806)
+		}
 		t.Errorf("linking failed: %v\n%s", err, out)
 	}
 

@@ -242,6 +242,8 @@ const (
 	ORECV             // <-X
 	ORUNESTR          // Type(X) (Type is string, X is rune)
 	OSELRECV2         // like OAS2: Lhs = Rhs where len(Lhs)=2, len(Rhs)=1, Rhs[0].Op = ORECV (appears as .Var of OCASE)
+	OMIN              // min(List)
+	OMAX              // max(List)
 	OREAL             // real(X)
 	OIMAG             // imag(X)
 	OCOMPLEX          // complex(X, Y)
@@ -292,7 +294,7 @@ const (
 	OEFACE         // itable and data words of an empty-interface value.
 	OITAB          // itable word of an interface value.
 	OIDATA         // data word of an interface value in X
-	OSPTR          // base pointer of a slice or string.
+	OSPTR          // base pointer of a slice or string. Bounded==1 means known non-nil.
 	OCFUNC         // reference to c function pointer (not go func value)
 	OCHECKNIL      // emit code to ensure pointer/interface not nil
 	ORESULT        // result of a function call; Xoffset is stack offset

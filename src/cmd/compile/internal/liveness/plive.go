@@ -31,8 +31,9 @@ import (
 	"cmd/compile/internal/types"
 	"cmd/internal/notsha256"
 	"cmd/internal/obj"
-	"cmd/internal/objabi"
 	"cmd/internal/src"
+
+	rtabi "internal/abi"
 )
 
 // OpVarDef is an annotation for the liveness analysis, marking a place
@@ -545,7 +546,7 @@ func (lv *liveness) markUnsafePoints() {
 						v = v.Args[0]
 						continue
 					}
-				case ssa.Op386MOVLload, ssa.OpARM64MOVWUload, ssa.OpPPC64MOVWZload, ssa.OpWasmI64Load32U:
+				case ssa.Op386MOVLload, ssa.OpARM64MOVWUload, ssa.OpMIPS64MOVWUload, ssa.OpPPC64MOVWZload, ssa.OpWasmI64Load32U:
 					// Args[0] is the address of the write
 					// barrier control. Ignore Args[1],
 					// which is the mem operand.
@@ -1361,20 +1362,20 @@ func Compute(curfn *ir.Func, f *ssa.Func, stkptrsize int64, pp *objw.Progs) (Map
 	fninfo.GCArgs, fninfo.GCLocals = lv.emit()
 
 	p := pp.Prog(obj.AFUNCDATA)
-	p.From.SetConst(objabi.FUNCDATA_ArgsPointerMaps)
+	p.From.SetConst(rtabi.FUNCDATA_ArgsPointerMaps)
 	p.To.Type = obj.TYPE_MEM
 	p.To.Name = obj.NAME_EXTERN
 	p.To.Sym = fninfo.GCArgs
 
 	p = pp.Prog(obj.AFUNCDATA)
-	p.From.SetConst(objabi.FUNCDATA_LocalsPointerMaps)
+	p.From.SetConst(rtabi.FUNCDATA_LocalsPointerMaps)
 	p.To.Type = obj.TYPE_MEM
 	p.To.Name = obj.NAME_EXTERN
 	p.To.Sym = fninfo.GCLocals
 
 	if x := lv.emitStackObjects(); x != nil {
 		p := pp.Prog(obj.AFUNCDATA)
-		p.From.SetConst(objabi.FUNCDATA_StackObjects)
+		p.From.SetConst(rtabi.FUNCDATA_StackObjects)
 		p.To.Type = obj.TYPE_MEM
 		p.To.Name = obj.NAME_EXTERN
 		p.To.Sym = x

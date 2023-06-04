@@ -111,11 +111,21 @@ nozerolarge:
 	STXVL   V0, R3, R7
 	RET
 #else
-	MOVD R5, CTR // set up to clear tail bytes
-zerotailloop:
-	MOVB R0, 0(R3)           // clear single bytes
-	ADD  $1, R3
-	BDNZ zerotailloop // dec ctr, br zerotailloop if ctr not 0
+	CMP   R5, $4
+	BLT   next2
+	MOVW  R0, 0(R3)
+	ADD   $4, R3
+	ADD   $-4, R5
+next2:
+	CMP   R5, $2
+	BLT   next1
+	MOVH  R0, 0(R3)
+	ADD   $2, R3
+	ADD   $-2, R5
+next1:
+	CMP   R5, $0
+	BC    12, 2, LR      // beqlr
+	MOVB  R0, 0(R3)
 	RET
 #endif
 
@@ -149,7 +159,7 @@ zero512setup:  // setup for dcbz loop
 	MOVD $128, R9   // index regs for 128 bytes
 	MOVD $256, R10
 	MOVD $384, R11
-	PCALIGN $32
+	PCALIGN $16
 zero512:
 	DCBZ (R3+R0)        // clear first chunk
 	DCBZ (R3+R9)        // clear second chunk

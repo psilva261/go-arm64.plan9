@@ -7,6 +7,7 @@
 package main
 
 import (
+	"cmd/go/internal/toolchain"
 	"cmd/go/internal/workcmd"
 	"context"
 	"flag"
@@ -16,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	rtrace "runtime/trace"
 	"strings"
 
 	"cmd/go/internal/base"
@@ -86,11 +88,14 @@ func init() {
 	}
 }
 
+var _ = go11tag
+
 func main() {
-	_ = go11tag
+	log.SetFlags(0)
+	toolchain.Switch()
+
 	flag.Usage = base.Usage
 	flag.Parse()
-	log.SetFlags(0)
 
 	args := flag.Args()
 	if len(args) < 1 {
@@ -195,7 +200,7 @@ func invoke(cmd *base.Command, args []string) {
 	if cmd != envcmd.CmdEnv {
 		buildcfg.Check()
 		if cfg.ExperimentErr != nil {
-			base.Fatalf("go: %v", cfg.ExperimentErr)
+			base.Fatal(cfg.ExperimentErr)
 		}
 	}
 
@@ -204,7 +209,7 @@ func invoke(cmd *base.Command, args []string) {
 	// the same default computation of these as we do,
 	// but in practice there might be skew
 	// This makes sure we all agree.
-	cfg.OrigEnv = os.Environ()
+	cfg.OrigEnv = toolchain.FilterEnv(os.Environ())
 	cfg.CmdEnv = envcmd.MkEnv()
 	for _, env := range cfg.CmdEnv {
 		if os.Getenv(env.Name) != env.Value {
@@ -220,6 +225,20 @@ func invoke(cmd *base.Command, args []string) {
 		cmd.Flag.Parse(args[1:])
 		args = cmd.Flag.Args()
 	}
+
+	if cfg.DebugRuntimeTrace != "" {
+		f, err := os.Create(cfg.DebugRuntimeTrace)
+		if err != nil {
+			base.Fatalf("creating trace file: %v", err)
+		}
+		if err := rtrace.Start(f); err != nil {
+			base.Fatalf("starting event trace: %v", err)
+		}
+		defer func() {
+			rtrace.Stop()
+		}()
+	}
+
 	ctx := maybeStartTrace(context.Background())
 	ctx, span := trace.StartSpan(ctx, fmt.Sprint("Running ", cmd.Name(), " command"))
 	cmd.Run(ctx, cmd, args)

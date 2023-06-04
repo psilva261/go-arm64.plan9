@@ -1,4 +1,4 @@
-// errorcheckwithauto -0 -m -d=inlfuncswithclosures=1 -d=inlstaticinit=1
+// errorcheckwithauto -0 -m -d=inlfuncswithclosures=1
 
 // Copyright 2015 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
@@ -110,6 +110,18 @@ func q(x int) int { // ERROR "can inline q"
 	return foo()                       // ERROR "inlining call to q.func1"
 }
 
+func r(z int) int {
+	foo := func(x int) int { // ERROR "can inline r.func1" "func literal does not escape"
+		return x + z
+	}
+	bar := func(x int) int { // ERROR "func literal does not escape" "can inline r.func2"
+		return x + func(y int) int { // ERROR "can inline r.func2.1" "can inline r.r.func2.func3"
+			return 2*y + x*z
+		}(x) // ERROR "inlining call to r.func2.1"
+	}
+	return foo(42) + bar(42) // ERROR "inlining call to r.func1" "inlining call to r.func2" "inlining call to r.r.func2.func3"
+}
+
 func s0(x int) int { // ERROR "can inline s0"
 	foo := func() { // ERROR "can inline s0.func1" "func literal does not escape"
 		x = x + 1
@@ -194,6 +206,20 @@ func switchConst3() string { // ERROR "can inline switchConst3"
 	default:
 		return "oh nose!"
 	}
+}
+func switchConst4() { // ERROR "can inline switchConst4"
+	const intSize = 32 << (^uint(0) >> 63)
+	want := func() string { // ERROR "can inline switchConst4.func1"
+		switch intSize {
+		case 32:
+			return "32"
+		case 64:
+			return "64"
+		default:
+			panic("unreachable")
+		}
+	}() // ERROR "inlining call to switchConst4.func1"
+	_ = want
 }
 
 func inlineRangeIntoMe(data []int) { // ERROR "can inline inlineRangeIntoMe" "data does not escape"

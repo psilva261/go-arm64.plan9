@@ -6,16 +6,18 @@ package os_test
 
 import (
 	"bytes"
+	"errors"
 	"internal/poll"
+	"internal/testpty"
 	"io"
 	"math/rand"
 	"net"
-	"os"
 	. "os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -82,13 +84,13 @@ func TestCopyFileRange(t *testing.T) {
 	t.Run("CopyFileItself", func(t *testing.T) {
 		hook := hookCopyFileRange(t)
 
-		f, err := os.CreateTemp("", "file-readfrom-itself-test")
+		f, err := CreateTemp("", "file-readfrom-itself-test")
 		if err != nil {
 			t.Fatalf("failed to create tmp file: %v", err)
 		}
 		t.Cleanup(func() {
 			f.Close()
-			os.Remove(f.Name())
+			Remove(f.Name())
 		})
 
 		data := []byte("hello world!")
@@ -228,7 +230,7 @@ func TestCopyFileRange(t *testing.T) {
 	})
 	t.Run("Nil", func(t *testing.T) {
 		var nilFile *File
-		anyFile, err := os.CreateTemp("", "")
+		anyFile, err := CreateTemp("", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -278,6 +280,12 @@ func TestSpliceFile(t *testing.T) {
 				testSpliceFile(t, "unix", int64(size), -1)
 			})
 		}
+	})
+	t.Run("TCP-To-TTY", func(t *testing.T) {
+		testSpliceToTTY(t, "tcp", 32768)
+	})
+	t.Run("Unix-To-TTY", func(t *testing.T) {
+		testSpliceToTTY(t, "unix", 32768)
 	})
 	t.Run("Limited", func(t *testing.T) {
 		t.Run("OneLess-TCP", func(t *testing.T) {
@@ -393,6 +401,81 @@ func testSpliceFile(t *testing.T, proto string, size, limit int64) {
 		if want := limit - n; lr.N != want {
 			t.Fatalf("didn't update limit correctly: got %d, want %d", lr.N, want)
 		}
+	}
+}
+
+// Issue #59041.
+func testSpliceToTTY(t *testing.T, proto string, size int64) {
+	var wg sync.WaitGroup
+
+	// Call wg.Wait as the final deferred function,
+	// because the goroutines may block until some of
+	// the deferred Close calls.
+	defer wg.Wait()
+
+	pty, ttyName, err := testpty.Open()
+	if err != nil {
+		t.Skipf("skipping test because pty open failed: %v", err)
+	}
+	defer pty.Close()
+
+	// Open the tty directly, rather than via OpenFile.
+	// This bypasses the non-blocking support and is required
+	// to recreate the problem in the issue (#59041).
+	ttyFD, err := syscall.Open(ttyName, syscall.O_RDWR, 0)
+	if err != nil {
+		t.Skipf("skipping test becaused failed to open tty: %v", err)
+	}
+	defer syscall.Close(ttyFD)
+
+	tty := NewFile(uintptr(ttyFD), "tty")
+	defer tty.Close()
+
+	client, server := createSocketPair(t, proto)
+
+	data := bytes.Repeat([]byte{'a'}, int(size))
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		// The problem (issue #59041) occurs when writing
+		// a series of blocks of data. It does not occur
+		// when all the data is written at once.
+		for i := 0; i < len(data); i += 1024 {
+			if _, err := client.Write(data[i : i+1024]); err != nil {
+				// If we get here because the client was
+				// closed, skip the error.
+				if !errors.Is(err, net.ErrClosed) {
+					t.Errorf("error writing to socket: %v", err)
+				}
+				return
+			}
+		}
+		client.Close()
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		buf := make([]byte, 32)
+		for {
+			if _, err := pty.Read(buf); err != nil {
+				if err != io.EOF && !errors.Is(err, ErrClosed) {
+					// An error here doesn't matter for
+					// our test.
+					t.Logf("error reading from pty: %v", err)
+				}
+				return
+			}
+		}
+	}()
+
+	// Close Client to wake up the writing goroutine if necessary.
+	defer client.Close()
+
+	_, err = io.Copy(tty, server)
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -637,17 +720,17 @@ func TestProcCopy(t *testing.T) {
 	t.Parallel()
 
 	const cmdlineFile = "/proc/self/cmdline"
-	cmdline, err := os.ReadFile(cmdlineFile)
+	cmdline, err := ReadFile(cmdlineFile)
 	if err != nil {
 		t.Skipf("can't read /proc file: %v", err)
 	}
-	in, err := os.Open(cmdlineFile)
+	in, err := Open(cmdlineFile)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer in.Close()
 	outFile := filepath.Join(t.TempDir(), "cmdline")
-	out, err := os.Create(outFile)
+	out, err := Create(outFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -657,7 +740,7 @@ func TestProcCopy(t *testing.T) {
 	if err := out.Close(); err != nil {
 		t.Fatal(err)
 	}
-	copy, err := os.ReadFile(outFile)
+	copy, err := ReadFile(outFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -682,7 +765,7 @@ func testGetPollFromReader(t *testing.T, proto string) {
 		t.Fatalf("server SyscallConn error: %v", err)
 	}
 	if err = rc.Control(func(fd uintptr) {
-		pfd := os.GetPollFDForTest(server)
+		pfd := GetPollFDForTest(server)
 		if pfd == nil {
 			t.Fatalf("GetPollFDForTest didn't return poll.FD")
 		}

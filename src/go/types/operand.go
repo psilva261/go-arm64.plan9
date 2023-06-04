@@ -222,10 +222,8 @@ func (x *operand) setConst(tok token.Token, lit string) {
 	x.val = val
 }
 
-// isNil reports whether x is the nil value.
-func (x *operand) isNil() bool {
-	return x.mode == value && x.typ == Typ[UntypedNil]
-}
+// isNil reports whether x is the (untyped) nil value.
+func (x *operand) isNil() bool { return x.mode == value && x.typ == Typ[UntypedNil] }
 
 // assignableTo reports whether x is assignable to a variable of type T. If the
 // result is false and a non-nil cause is provided, it may be set to a more
@@ -282,7 +280,7 @@ func (x *operand) assignableTo(check *Checker, T Type, cause *string) (bool, Cod
 	// T is an interface type and x implements T and T is not a type parameter.
 	// Also handle the case where T is a pointer to an interface.
 	if _, ok := Tu.(*Interface); ok && Tp == nil || isInterfacePtr(Tu) {
-		if !check.implements(V, T, false, cause) {
+		if !check.implements(x.Pos(), V, T, false, cause) {
 			return false, InvalidIfaceAssign
 		}
 		return true, 0
@@ -290,7 +288,7 @@ func (x *operand) assignableTo(check *Checker, T Type, cause *string) (bool, Cod
 
 	// If V is an interface, check if a missing type assertion is the problem.
 	if Vi, _ := Vu.(*Interface); Vi != nil && Vp == nil {
-		if check.implements(T, V, false, nil) {
+		if check.implements(x.Pos(), T, V, false, nil) {
 			// T implements V, so give hint about type assertion.
 			if cause != nil {
 				*cause = "need type assertion"

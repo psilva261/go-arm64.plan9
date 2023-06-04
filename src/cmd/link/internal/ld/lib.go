@@ -119,6 +119,10 @@ type ArchSyms struct {
 	DynStr  loader.Sym
 
 	unreachableMethod loader.Sym
+
+	// Symbol containing a list of all the inittasks that need
+	// to be run at startup.
+	mainInittasks loader.Sym
 }
 
 // mkArchSym is a helper for setArchSyms, to set up a special symbol.
@@ -324,8 +328,10 @@ var (
 	Segrelrodata sym.Segment
 	Segdata      sym.Segment
 	Segdwarf     sym.Segment
+	Segpdata     sym.Segment // windows-only
+	Segxdata     sym.Segment // windows-only
 
-	Segments = []*sym.Segment{&Segtext, &Segrodata, &Segrelrodata, &Segdata, &Segdwarf}
+	Segments = []*sym.Segment{&Segtext, &Segrodata, &Segrelrodata, &Segdata, &Segdwarf, &Segpdata, &Segxdata}
 )
 
 const pkgdef = "__.PKGDEF"
@@ -340,6 +346,12 @@ var (
 	// the dynimport file, _cgo_import.go, failed. If there are
 	// any of these objects, we must link externally. Issue 52863.
 	dynimportfail []string
+
+	// preferlinkext is a list of packages for which the Go command
+	// noticed use of peculiar C flags. If we see any of these,
+	// default to linking externally unless overridden by the
+	// user. See issues #58619, #58620, and #58848.
+	preferlinkext []string
 
 	// unknownObjFormat is set to true if we see an object whose
 	// format we don't recognize.
@@ -516,8 +528,7 @@ func (ctxt *Link) loadlib() {
 	default:
 		log.Fatalf("invalid -strictdups flag value %d", *FlagStrictDups)
 	}
-	elfsetstring1 := func(str string, off int) { elfsetstring(ctxt, 0, str, off) }
-	ctxt.loader = loader.NewLoader(flags, elfsetstring1, &ctxt.ErrorReporter.ErrorReporter)
+	ctxt.loader = loader.NewLoader(flags, &ctxt.ErrorReporter.ErrorReporter)
 	ctxt.ErrorReporter.SymName = func(s loader.Sym) string {
 		return ctxt.loader.SymName(s)
 	}
@@ -1086,6 +1097,13 @@ func loadobjfile(ctxt *Link, lib *sym.Library) {
 		if arhdr.name == "dynimportfail" {
 			dynimportfail = append(dynimportfail, lib.Pkg)
 		}
+		if arhdr.name == "preferlinkext" {
+			// Ignore this directive if -linkmode has been
+			// set explicitly.
+			if ctxt.LinkMode == LinkAuto {
+				preferlinkext = append(preferlinkext, lib.Pkg)
+			}
+		}
 
 		// Skip other special (non-object-file) sections that
 		// build tools may have added. Such sections must have
@@ -1390,6 +1408,12 @@ func (ctxt *Link) hostlink() {
 	case objabi.Hopenbsd:
 		argv = append(argv, "-Wl,-nopie")
 		argv = append(argv, "-pthread")
+		if ctxt.Arch.InFamily(sys.ARM64) {
+			// Disable execute-only on openbsd/arm64 - the Go arm64 assembler
+			// currently stores constants in the text section rather than in rodata.
+			// See issue #59615.
+			argv = append(argv, "-Wl,--no-execute-only")
+		}
 	case objabi.Hwindows:
 		if windowsgui {
 			argv = append(argv, "-mwindows")
@@ -1880,7 +1904,11 @@ func (ctxt *Link) hostlink() {
 		stripCmd := strings.TrimSuffix(string(out), "\n")
 
 		dsym := filepath.Join(*flagTmpdir, "go.dwarf")
-		if out, err := exec.Command(dsymutilCmd, "-f", *flagOutfile, "-o", dsym).CombinedOutput(); err != nil {
+		cmd := exec.Command(dsymutilCmd, "-f", *flagOutfile, "-o", dsym)
+		// dsymutil may not clean up its temp directory at exit.
+		// Set DSYMUTIL_REPRODUCER_PATH to work around. see issue 59026.
+		cmd.Env = append(os.Environ(), "DSYMUTIL_REPRODUCER_PATH="+*flagTmpdir)
+		if out, err := cmd.CombinedOutput(); err != nil {
 			Exitf("%s: running dsymutil failed: %v\n%s", os.Args[0], err, out)
 		}
 		// Remove STAB (symbolic debugging) symbols after we are done with them (by dsymutil).
@@ -1978,10 +2006,11 @@ func linkerFlagSupported(arch *sys.Arch, linker, altLinker, flag string) bool {
 	if altLinker != "" {
 		flags = append(flags, "-fuse-ld="+altLinker)
 	}
-	flags = append(flags, flag, "trivial.c")
+	trivialPath := filepath.Join(*flagTmpdir, "trivial.c")
+	outPath := filepath.Join(*flagTmpdir, "a.out")
+	flags = append(flags, "-o", outPath, flag, trivialPath)
 
 	cmd := exec.Command(linker, flags...)
-	cmd.Dir = *flagTmpdir
 	cmd.Env = append([]string{"LC_ALL=C"}, os.Environ()...)
 	out, err := cmd.CombinedOutput()
 	// GCC says "unrecognized command line option ‘-no-pie’"

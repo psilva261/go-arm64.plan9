@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -357,7 +358,7 @@ func (s *emitState) openMetaFile(metaHash [16]byte, metaLen uint64) error {
 	fi, err := os.Stat(s.mfname)
 	if err != nil || fi.Size() != int64(metaLen) {
 		// We need a new meta-file.
-		tname := "tmp." + fn + fmt.Sprintf("%d", time.Now().UnixNano())
+		tname := "tmp." + fn + strconv.FormatInt(time.Now().UnixNano(), 10)
 		s.mftmp = filepath.Join(s.outdir, tname)
 		s.mf, err = os.Create(s.mftmp)
 		if err != nil {
@@ -460,52 +461,6 @@ func writeMetaData(w io.Writer, metalist []rtcov.CovMetaBlob, cmode coverage.Cou
 		blobs = append(blobs, sd)
 	}
 	return mfw.Write(finalHash, blobs, cmode, gran)
-}
-
-func (s *emitState) NumFuncs() (int, error) {
-	var sd []atomic.Uint32
-	bufHdr := (*reflect.SliceHeader)(unsafe.Pointer(&sd))
-
-	totalFuncs := 0
-	for _, c := range s.counterlist {
-		bufHdr.Data = uintptr(unsafe.Pointer(c.Counters))
-		bufHdr.Len = int(c.Len)
-		bufHdr.Cap = int(c.Len)
-		for i := 0; i < len(sd); i++ {
-			// Skip ahead until the next non-zero value.
-			sdi := sd[i].Load()
-			if sdi == 0 {
-				continue
-			}
-
-			// We found a function that was executed.
-			nCtrs := sdi
-
-			// Check to make sure that we have at least one live
-			// counter. See the implementation note in ClearCoverageCounters
-			// for a description of why this is needed.
-			isLive := false
-			st := i + coverage.FirstCtrOffset
-			counters := sd[st : st+int(nCtrs)]
-			for i := 0; i < len(counters); i++ {
-				if counters[i].Load() != 0 {
-					isLive = true
-					break
-				}
-			}
-			if !isLive {
-				// Skip this function.
-				i += coverage.FirstCtrOffset + int(nCtrs) - 1
-				continue
-			}
-
-			totalFuncs++
-
-			// Move to the next function.
-			i += coverage.FirstCtrOffset + int(nCtrs) - 1
-		}
-	}
-	return totalFuncs, nil
 }
 
 func (s *emitState) VisitFuncs(f encodecounter.CounterVisitorFn) error {
@@ -613,7 +568,7 @@ func (s *emitState) VisitFuncs(f encodecounter.CounterVisitorFn) error {
 // is also used to capture GOOS + GOARCH values as well.
 func captureOsArgs() map[string]string {
 	m := make(map[string]string)
-	m["argc"] = fmt.Sprintf("%d", len(os.Args))
+	m["argc"] = strconv.Itoa(len(os.Args))
 	for k, a := range os.Args {
 		m[fmt.Sprintf("argv%d", k)] = a
 	}

@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"fmt"
 	"internal/testenv"
-	"os"
 	. "os"
 	"path/filepath"
 	"runtime"
@@ -80,8 +79,8 @@ func TestRemoveAll(t *testing.T) {
 		t.Fatalf("Lstat %q succeeded after RemoveAll (third)", path)
 	}
 
-	// Chmod is not supported under Windows and test fails as root.
-	if runtime.GOOS != "windows" && Getuid() != 0 {
+	// Chmod is not supported under Windows or wasip1 and test fails as root.
+	if runtime.GOOS != "windows" && runtime.GOOS != "wasip1" && Getuid() != 0 {
 		// Make directory with file and subdirectory and trigger error.
 		if err = MkdirAll(dpath, 0777); err != nil {
 			t.Fatalf("MkdirAll %q: %s", dpath, err)
@@ -165,7 +164,7 @@ func TestRemoveAllLongPath(t *testing.T) {
 		t.Fatalf("Could not get wd: %s", err)
 	}
 
-	startPath, err := os.MkdirTemp("", "TestRemoveAllLongPath-")
+	startPath, err := MkdirTemp("", "TestRemoveAllLongPath-")
 	if err != nil {
 		t.Fatalf("Could not create TempDir: %s", err)
 	}
@@ -207,7 +206,7 @@ func TestRemoveAllDot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Could not get wd: %s", err)
 	}
-	tempDir, err := os.MkdirTemp("", "TestRemoveAllDot-")
+	tempDir, err := MkdirTemp("", "TestRemoveAllDot-")
 	if err != nil {
 		t.Fatalf("Could not create TempDir: %s", err)
 	}
@@ -274,7 +273,7 @@ func TestRemoveReadOnlyDir(t *testing.T) {
 // Issue #29983.
 func TestRemoveAllButReadOnlyAndPathError(t *testing.T) {
 	switch runtime.GOOS {
-	case "js", "windows":
+	case "js", "wasip1", "windows":
 		t.Skipf("skipping test on %s", runtime.GOOS)
 	}
 
@@ -407,7 +406,7 @@ func TestRemoveAllWithMoreErrorThanReqSize(t *testing.T) {
 	}
 
 	// Make the parent directory read-only. On some platforms, this is what
-	// prevents os.Remove from removing the files within that directory.
+	// prevents Remove from removing the files within that directory.
 	if err := Chmod(path, 0555); err != nil {
 		t.Fatal(err)
 	}
@@ -422,9 +421,12 @@ func TestRemoveAllWithMoreErrorThanReqSize(t *testing.T) {
 		return
 	}
 	if err == nil {
-		if runtime.GOOS == "windows" {
+		if runtime.GOOS == "windows" || runtime.GOOS == "wasip1" {
 			// Marking a directory as read-only in Windows does not prevent the RemoveAll
 			// from creating or removing files within it.
+			//
+			// For wasip1, there is no support for file permissions so we cannot prevent
+			// RemoveAll from removing the files.
 			return
 		}
 		t.Fatal("RemoveAll(<read-only directory>) = nil; want error")

@@ -6,9 +6,8 @@ package obj
 
 import (
 	"bytes"
-	"cmd/internal/objabi"
-	"cmd/internal/src"
 	"fmt"
+	"internal/abi"
 	"internal/buildcfg"
 	"io"
 	"strings"
@@ -46,10 +45,6 @@ func (p *Prog) InnermostFilename() string {
 		return "<unknown file name>"
 	}
 	return pos.Filename()
-}
-
-func (p *Prog) AllPos(result []src.Pos) []src.Pos {
-	return p.Ctxt.AllPos(p.Pos, result)
 }
 
 var armCondCode = []string{
@@ -313,7 +308,7 @@ func writeDconv(w io.Writer, p *Prog, a *Addr, abiDetail bool) {
 		}
 
 	case TYPE_TEXTSIZE:
-		if a.Val.(int32) == objabi.ArgsSizeUnknown {
+		if a.Val.(int32) == abi.ArgsSizeUnknown {
 			fmt.Fprintf(w, "$%d", a.Offset)
 		} else {
 			fmt.Fprintf(w, "$%d-%d", a.Offset, a.Val.(int32))

@@ -24,7 +24,6 @@ func RaceDetectorSupported(goos, goarch string) bool {
 
 // MSanSupported reports whether goos/goarch supports the memory
 // sanitizer option.
-// There is a copy of this function in misc/cgo/testsanitizers/cc_test.go.
 func MSanSupported(goos, goarch string) bool {
 	switch goos {
 	case "linux":
@@ -38,7 +37,6 @@ func MSanSupported(goos, goarch string) bool {
 
 // ASanSupported reports whether goos/goarch supports the address
 // sanitizer option.
-// There is a copy of this function in misc/cgo/testsanitizers/cc_test.go.
 func ASanSupported(goos, goarch string) bool {
 	switch goos {
 	case "linux":
@@ -126,6 +124,9 @@ func BuildModeSupported(compiler, buildmode, goos, goarch string) bool {
 	}
 
 	platform := goos + "/" + goarch
+	if _, ok := osArchSupportsCgo[platform]; !ok {
+		return false // platform unrecognized
+	}
 
 	switch buildmode {
 	case "archive":
@@ -137,7 +138,7 @@ func BuildModeSupported(compiler, buildmode, goos, goarch string) bool {
 			return true
 		case "linux":
 			switch goarch {
-			case "386", "amd64", "arm", "armbe", "arm64", "arm64be", "ppc64le", "riscv64", "s390x":
+			case "386", "amd64", "arm", "armbe", "arm64", "arm64be", "loong64", "ppc64le", "riscv64", "s390x":
 				// linux/ppc64 not supported because it does
 				// not support external linking mode yet.
 				return true
@@ -157,7 +158,7 @@ func BuildModeSupported(compiler, buildmode, goos, goarch string) bool {
 
 	case "c-shared":
 		switch platform {
-		case "linux/amd64", "linux/arm", "linux/arm64", "linux/386", "linux/ppc64le", "linux/riscv64", "linux/s390x",
+		case "linux/amd64", "linux/arm", "linux/arm64", "linux/loong64", "linux/386", "linux/ppc64le", "linux/riscv64", "linux/s390x",
 			"android/amd64", "android/arm", "android/arm64", "android/386",
 			"freebsd/amd64",
 			"darwin/amd64", "darwin/arm64",
@@ -174,7 +175,7 @@ func BuildModeSupported(compiler, buildmode, goos, goarch string) bool {
 
 	case "pie":
 		switch platform {
-		case "linux/386", "linux/amd64", "linux/arm", "linux/arm64", "linux/ppc64le", "linux/riscv64", "linux/s390x",
+		case "linux/386", "linux/amd64", "linux/arm", "linux/arm64", "linux/loong64", "linux/ppc64le", "linux/riscv64", "linux/s390x",
 			"android/amd64", "android/arm", "android/arm64", "android/386",
 			"freebsd/amd64",
 			"darwin/amd64", "darwin/arm64",
@@ -216,4 +217,39 @@ func InternalLinkPIESupported(goos, goarch string) bool {
 		return true
 	}
 	return false
+}
+
+// DefaultPIE reports whether goos/goarch produces a PIE binary when using the
+// "default" buildmode. On Windows this is affected by -race,
+// so force the caller to pass that in to centralize that choice.
+func DefaultPIE(goos, goarch string, isRace bool) bool {
+	switch goos {
+	case "android", "ios":
+		return true
+	case "windows":
+		if isRace {
+			// PIE is not supported with -race on windows;
+			// see https://go.dev/cl/416174.
+			return false
+		}
+		return true
+	case "darwin":
+		return goarch == "arm64"
+	}
+	return false
+}
+
+// CgoSupported reports whether goos/goarch supports cgo.
+func CgoSupported(goos, goarch string) bool {
+	return osArchSupportsCgo[goos+"/"+goarch]
+}
+
+// ExecutableHasDWARF reports whether the linked executable includes DWARF
+// symbols on goos/goarch.
+func ExecutableHasDWARF(goos, goarch string) bool {
+	switch goos {
+	case "plan9", "ios":
+		return false
+	}
+	return true
 }

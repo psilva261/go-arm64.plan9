@@ -327,6 +327,7 @@ var optab = []Optab{
 
 	/* Misc ISA 3.0 instructions */
 	{as: ASETB, a1: C_CREG, a6: C_REG, type_: 110, size: 4},
+	{as: AVCLZLSBB, a1: C_VREG, a6: C_REG, type_: 85, size: 4},
 
 	/* Vector instructions */
 
@@ -584,40 +585,17 @@ var buildOpCfg = ""    // Save the os/cpu/arch tuple used to configure the assem
 
 // padding bytes to add to align code as requested.
 func addpad(pc, a int64, ctxt *obj.Link, cursym *obj.LSym) int {
-	// For 16 and 32 byte alignment, there is a tradeoff
-	// between aligning the code and adding too many NOPs.
 	switch a {
-	case 8:
-		if pc&7 != 0 {
-			return 4
+	case 8, 16, 32, 64:
+		// By default function alignment is 16. If an alignment > 16 is
+		// requested then the function alignment must also be promoted.
+		// The function alignment is not promoted on AIX at this time.
+		// TODO: Investigate AIX function alignment.
+		if ctxt.Headtype != objabi.Haix && cursym.Func().Align < int32(a) {
+			cursym.Func().Align = int32(a)
 		}
-	case 16:
-		// Align to 16 bytes if possible but add at
-		// most 2 NOPs.
-		switch pc & 15 {
-		case 4, 12:
-			return 4
-		case 8:
-			return 8
-		}
-	case 32:
-		// Align to 32 bytes if possible but add at
-		// most 3 NOPs.
-		switch pc & 31 {
-		case 4, 20:
-			return 12
-		case 8, 24:
-			return 8
-		case 12, 28:
-			return 4
-		}
-		// When 32 byte alignment is requested on Linux,
-		// promote the function's alignment to 32. On AIX
-		// the function alignment is not changed which might
-		// result in 16 byte alignment but that is still fine.
-		// TODO: alignment on AIX
-		if ctxt.Headtype != objabi.Haix && cursym.Func().Align < 32 {
-			cursym.Func().Align = 32
+		if pc&(a-1) != 0 {
+			return int(a - (pc & (a - 1)))
 		}
 	default:
 		ctxt.Diag("Unexpected alignment: %d for PCALIGN directive\n", a)
@@ -625,7 +603,7 @@ func addpad(pc, a int64, ctxt *obj.Link, cursym *obj.LSym) int {
 	return 0
 }
 
-// Get the implied register of a operand which doesn't specify one.  These show up
+// Get the implied register of an operand which doesn't specify one.  These show up
 // in handwritten asm like "MOVD R5, foosymbol" where a base register is not supplied,
 // or "MOVD R5, foo+10(SP) or pseudo-register is used.  The other common case is when
 // generating constants in register like "MOVD $constant, Rx".
@@ -1093,7 +1071,7 @@ func (c *ctxt9) aclass(a *obj.Addr) int {
 		}
 
 	case obj.TYPE_BRANCH:
-		if a.Sym != nil && c.ctxt.Flag_dynlink {
+		if a.Sym != nil && c.ctxt.Flag_dynlink && !pfxEnabled {
 			return C_LBRAPIC
 		}
 		return C_SBRA
@@ -1297,11 +1275,16 @@ func opset(a, b0 obj.As) {
 	oprange[a&obj.AMask] = oprange[b0]
 }
 
+// Determine if the build configuration requires a TOC pointer.
+// It is assumed this always called after buildop.
+func NeedTOCpointer(ctxt *obj.Link) bool {
+	return !pfxEnabled && ctxt.Flag_shared
+}
+
 // Build the opcode table
 func buildop(ctxt *obj.Link) {
-	// PC-rel relocation support is available only for targets which support
-	// ELFv2 1.5 (only power10/ppc64le/linux today).
-	pfxEnabled = buildcfg.GOPPC64 >= 10 && buildcfg.GOOS == "linux" && buildcfg.GOARCH == "ppc64le"
+	// Limit PC-relative prefix instruction usage to supported and tested targets.
+	pfxEnabled = buildcfg.GOPPC64 >= 10 && buildcfg.GOOS == "linux"
 	cfg := fmt.Sprintf("power%d/%s/%s", buildcfg.GOPPC64, buildcfg.GOARCH, buildcfg.GOOS)
 	if cfg == buildOpCfg {
 		// Already initialized to correct OS/cpu; stop now.
@@ -2088,6 +2071,9 @@ func buildop(ctxt *obj.Link) {
 
 		case AMOVW: /* load/store/move word with sign extension; move 32-bit literals  */
 			opset(AMOVWZ, r0) /* Same as above, but zero extended */
+
+		case AVCLZLSBB:
+			opset(AVCTZLSBB, r0)
 
 		case AADD,
 			AADDIS,
@@ -3284,8 +3270,15 @@ func asmout(c *ctxt9, p *obj.Prog, o *Optab, out *[5]uint32) {
 			o1 |= uint32((v >> 16) & 0x3FFFF)
 			o2 |= uint32(v & 0xFFFF)
 		} else {
-			o1 = AOP_IRR(OP_ADDIS, uint32(p.To.Reg), uint32(r), uint32(high16adjusted(v)))
-			o2 = AOP_IRR(c.opload(p.As), uint32(p.To.Reg), uint32(p.To.Reg), uint32(v))
+			if o.a6 == C_REG {
+				// Reuse the base register when loading a GPR (C_REG) to avoid
+				// using REGTMP (R31) when possible.
+				o1 = AOP_IRR(OP_ADDIS, uint32(p.To.Reg), uint32(r), uint32(high16adjusted(v)))
+				o2 = AOP_IRR(c.opload(p.As), uint32(p.To.Reg), uint32(p.To.Reg), uint32(v))
+			} else {
+				o1 = AOP_IRR(OP_ADDIS, uint32(REGTMP), uint32(r), uint32(high16adjusted(v)))
+				o2 = AOP_IRR(c.opload(p.As), uint32(p.To.Reg), uint32(REGTMP), uint32(v))
+			}
 		}
 
 		// Sign extend MOVB if needed
@@ -3677,8 +3670,8 @@ func asmout(c *ctxt9, p *obj.Prog, o *Optab, out *[5]uint32) {
 				rel.Type = objabi.R_ADDRPOWER_TOCREL_DS
 			}
 		default:
-			reuseBaseReg := p.As != AFMOVD && p.As != AFMOVS
-			// Reuse To.Reg as base register if not FP move.
+			reuseBaseReg := o.a6 == C_REG
+			// Reuse To.Reg as base register if it is a GPR.
 			o1, o2, rel = c.symbolAccess(p.From.Sym, v, p.To.Reg, inst, reuseBaseReg)
 		}
 
@@ -4783,6 +4776,11 @@ func (c *ctxt9) oprrr(a obj.As) uint32 {
 		return OPVX(4, 1922, 0, 0) /* vclzw - v2.07 */
 	case AVCLZD:
 		return OPVX(4, 1986, 0, 0) /* vclzd - v2.07 */
+
+	case AVCLZLSBB:
+		return OPVX(4, 1538, 0, 0) /* vclzlsbb - v3.0 */
+	case AVCTZLSBB:
+		return OPVX(4, 1538, 0, 0) | 1<<16 /* vctzlsbb - v3.0 */
 
 	case AVPOPCNTB:
 		return OPVX(4, 1795, 0, 0) /* vpopcntb - v2.07 */

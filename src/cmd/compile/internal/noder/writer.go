@@ -108,7 +108,7 @@ func newPkgWriter(m posMap, pkg *types2.Package, info *types2.Info) *pkgWriter {
 
 // errorf reports a user error about thing p.
 func (pw *pkgWriter) errorf(p poser, msg string, args ...interface{}) {
-	base.ErrorfAt(pw.m.pos(p), msg, args...)
+	base.ErrorfAt(pw.m.pos(p), 0, msg, args...)
 }
 
 // fatalf reports an internal compiler error about thing p.
@@ -123,14 +123,25 @@ func (pw *pkgWriter) unexpected(what string, p poser) {
 }
 
 func (pw *pkgWriter) typeAndValue(x syntax.Expr) syntax.TypeAndValue {
-	tv := x.GetTypeInfo()
-	if tv.Type == nil {
+	tv, ok := pw.maybeTypeAndValue(x)
+	if !ok {
 		pw.fatalf(x, "missing Types entry: %v", syntax.String(x))
 	}
 	return tv
 }
+
 func (pw *pkgWriter) maybeTypeAndValue(x syntax.Expr) (syntax.TypeAndValue, bool) {
 	tv := x.GetTypeInfo()
+
+	// If x is a generic function whose type arguments are inferred
+	// from assignment context, then we need to find its inferred type
+	// in Info.Instances instead.
+	if name, ok := x.(*syntax.Name); ok {
+		if inst, ok := pw.info.Instances[name]; ok {
+			tv.Type = inst.Type
+		}
+	}
+
 	return tv, tv.Type != nil
 }
 

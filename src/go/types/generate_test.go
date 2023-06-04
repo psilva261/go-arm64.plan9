@@ -98,15 +98,19 @@ var filemap = map[string]action{
 	"array.go":        nil,
 	"basic.go":        nil,
 	"chan.go":         nil,
+	"const.go":        func(f *ast.File) { fixTokenPos(f) },
 	"context.go":      nil,
 	"context_test.go": nil,
 	"gccgosizes.go":   nil,
 	"hilbert_test.go": nil,
-	"infer.go":        func(f *ast.File) { fixTokenPos(f); fixInferSig(f) },
+	"infer.go": func(f *ast.File) {
+		fixTokenPos(f)
+		fixInferSig(f)
+	},
 	// "initorder.go": fixErrErrorfCall, // disabled for now due to unresolved error_ use implications for gopls
 	"instantiate.go":      func(f *ast.File) { fixTokenPos(f); fixCheckErrorfCall(f) },
 	"instantiate_test.go": func(f *ast.File) { renameImportPath(f, `"cmd/compile/internal/types2"`, `"go/types"`) },
-	"lookup.go":           nil,
+	"lookup.go":           func(f *ast.File) { fixTokenPos(f) },
 	"main_test.go":        nil,
 	"map.go":              nil,
 	"named.go":            func(f *ast.File) { fixTokenPos(f); fixTraceSel(f) },

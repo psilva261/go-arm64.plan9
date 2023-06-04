@@ -65,7 +65,7 @@ func LoadPackage(filenames []string) {
 	var m posMap
 	for _, p := range noders {
 		for e := range p.err {
-			base.ErrorfAt(m.makeXPos(e.Pos), "%s", e.Msg)
+			base.ErrorfAt(m.makeXPos(e.Pos), 0, "%s", e.Msg)
 		}
 		if p.file == nil {
 			base.ErrorExit()
@@ -235,10 +235,6 @@ func (p *noder) pragma(pos syntax.Pos, blankLine bool, text string, old syntax.P
 		f := strings.Fields(text)
 		if len(f) != 3 {
 			p.error(syntax.Error{Pos: pos, Msg: "usage: //go:wasmimport importmodule importname"})
-			break
-		}
-		if !base.Flag.CompilingRuntime && base.Ctxt.Pkgpath != "syscall/js" && base.Ctxt.Pkgpath != "syscall/js_test" {
-			p.error(syntax.Error{Pos: pos, Msg: "//go:wasmimport directive cannot be used outside of runtime or syscall/js"})
 			break
 		}
 

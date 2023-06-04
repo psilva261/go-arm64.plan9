@@ -8,7 +8,6 @@ import (
 	"cmd/internal/notsha256"
 	"flag"
 	"fmt"
-	"go/build"
 	"internal/platform"
 	"internal/testenv"
 	"os"
@@ -253,7 +252,7 @@ func testDisasm(t *testing.T, srcfname string, printCode bool, printGnuAsm bool,
 func testGoAndCgoDisasm(t *testing.T, printCode bool, printGnuAsm bool) {
 	t.Parallel()
 	testDisasm(t, "fmthello.go", printCode, printGnuAsm)
-	if build.Default.CgoEnabled {
+	if testenv.HasCGO() {
 		testDisasm(t, "fmthellocgo.go", printCode, printGnuAsm)
 	}
 }
@@ -273,7 +272,7 @@ func TestDisasmGnuAsm(t *testing.T) {
 func TestDisasmExtld(t *testing.T) {
 	testenv.MustHaveCGO(t)
 	switch runtime.GOOS {
-	case "plan9", "windows":
+	case "plan9":
 		t.Skipf("skipping on %s", runtime.GOOS)
 	}
 	t.Parallel()
