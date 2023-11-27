@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -64,7 +65,7 @@ var (
 
 	// dirs are the directories to look for *.go files in.
 	// TODO(bradfitz): just use all directories?
-	dirs = []string{".", "ken", "chan", "interface", "syntax", "dwarf", "fixedbugs", "codegen", "runtime", "abi", "typeparam", "typeparam/mdempsky"}
+	dirs = []string{".", "ken", "chan", "interface", "syntax", "dwarf", "fixedbugs", "codegen", "runtime", "abi", "typeparam", "typeparam/mdempsky", "arenas"}
 )
 
 // Test is the main entrypoint that runs tests in the GOROOT/test directory.
@@ -115,6 +116,15 @@ func Test(t *testing.T) {
 	common := testCommon{
 		gorootTestDir: filepath.Join(testenv.GOROOT(t), "test"),
 		runoutputGate: make(chan bool, *runoutputLimit),
+	}
+
+	// cmd/distpack deletes GOROOT/test, so skip the test if it isn't present.
+	// cmd/distpack also requires GOROOT/VERSION to exist, so use that to
+	// suppress false-positive skips.
+	if _, err := os.Stat(common.gorootTestDir); os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(testenv.GOROOT(t), "VERSION")); err == nil {
+			t.Skipf("skipping: GOROOT/test not present")
+		}
 	}
 
 	for _, dir := range dirs {
@@ -201,7 +211,7 @@ func compileInDir(runcmd runCmd, dir string, flags []string, importcfg string, p
 	return runcmd(cmd...)
 }
 
-var stdlibImportcfgStringOnce sync.Once // TODO(#56102): Use sync.OnceValue once availabe. Also below.
+var stdlibImportcfgStringOnce sync.Once // TODO(#56102): Use sync.OnceValue once available. Also below.
 var stdlibImportcfgString string
 
 func stdlibImportcfg() string {
@@ -408,13 +418,12 @@ func (ctxt *context) match(name string) bool {
 		}
 	}
 
+	if slices.Contains(build.Default.ReleaseTags, name) {
+		return true
+	}
+
 	if strings.HasPrefix(name, "goexperiment.") {
-		for _, tag := range build.Default.ToolTags {
-			if tag == name {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(build.Default.ToolTags, name)
 	}
 
 	if name == "cgo" && ctxt.cgoEnabled {
@@ -468,16 +477,20 @@ func (t test) run() error {
 	}
 	src := string(srcBytes)
 
-	// Execution recipe stops at first blank line.
-	action, _, ok := strings.Cut(src, "\n\n")
-	if !ok {
-		t.Fatalf("double newline ending execution recipe not found in GOROOT/test/%s", t.goFileName())
+	// Execution recipe is contained in a comment in
+	// the first non-empty line that is not a build constraint.
+	var action string
+	for actionSrc := src; action == "" && actionSrc != ""; {
+		var line string
+		line, actionSrc, _ = strings.Cut(actionSrc, "\n")
+		if constraint.IsGoBuild(line) || constraint.IsPlusBuild(line) {
+			continue
+		}
+		action = strings.TrimSpace(strings.TrimPrefix(line, "//"))
 	}
-	if firstLine, rest, ok := strings.Cut(action, "\n"); ok && strings.Contains(firstLine, "+build") {
-		// skip first line
-		action = rest
+	if action == "" {
+		t.Fatalf("execution recipe not found in GOROOT/test/%s", t.goFileName())
 	}
-	action = strings.TrimPrefix(action, "//")
 
 	// Check for build constraints only up to the actual code.
 	header, _, ok := strings.Cut(src, "\npackage")
@@ -1445,7 +1458,7 @@ var (
 	archVariants = map[string][]string{
 		"386":     {"GO386", "sse2", "softfloat"},
 		"amd64":   {"GOAMD64", "v1", "v2", "v3", "v4"},
-		"arm":     {"GOARM", "5", "6", "7"},
+		"arm":     {"GOARM", "5", "6", "7", "7,softfloat"},
 		"arm64":   {},
 		"loong64": {},
 		"mips":    {"GOMIPS", "hardfloat", "softfloat"},
@@ -1738,6 +1751,9 @@ func TestShouldTest(t *testing.T) {
 
 	// Test that (!a OR !b) matches anything.
 	assert(shouldTest("// +build !windows !plan9", "windows", "amd64"))
+
+	// Test that //go:build tag match.
+	assert(shouldTest("//go:build go1.4", "linux", "amd64"))
 }
 
 // overlayDir makes a minimal-overhead copy of srcRoot in which new files may be added.

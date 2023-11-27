@@ -157,20 +157,26 @@ func (f *File) ReadFrom(r io.Reader) (n int64, err error) {
 	return n, f.wrapErr("write", e)
 }
 
-func genericReadFrom(f *File, r io.Reader) (int64, error) {
-	return io.Copy(fileWithoutReadFrom{f}, r)
+// noReadFrom can be embedded alongside another type to
+// hide the ReadFrom method of that other type.
+type noReadFrom struct{}
+
+// ReadFrom hides another ReadFrom method.
+// It should never be called.
+func (noReadFrom) ReadFrom(io.Reader) (int64, error) {
+	panic("can't happen")
 }
 
 // fileWithoutReadFrom implements all the methods of *File other
 // than ReadFrom. This is used to permit ReadFrom to call io.Copy
 // without leading to a recursive call to ReadFrom.
 type fileWithoutReadFrom struct {
+	noReadFrom
 	*File
 }
 
-// This ReadFrom method hides the *File ReadFrom method.
-func (fileWithoutReadFrom) ReadFrom(fileWithoutReadFrom) {
-	panic("unreachable")
+func genericReadFrom(f *File, r io.Reader) (int64, error) {
+	return io.Copy(fileWithoutReadFrom{File: f}, r)
 }
 
 // Write writes len(b) bytes from b to the File.
@@ -227,6 +233,40 @@ func (f *File) WriteAt(b []byte, off int64) (n int, err error) {
 		off += int64(m)
 	}
 	return
+}
+
+// WriteTo implements io.WriterTo.
+func (f *File) WriteTo(w io.Writer) (n int64, err error) {
+	if err := f.checkValid("read"); err != nil {
+		return 0, err
+	}
+	n, handled, e := f.writeTo(w)
+	if handled {
+		return n, f.wrapErr("read", e)
+	}
+	return genericWriteTo(f, w) // without wrapping
+}
+
+// noWriteTo can be embedded alongside another type to
+// hide the WriteTo method of that other type.
+type noWriteTo struct{}
+
+// WriteTo hides another WriteTo method.
+// It should never be called.
+func (noWriteTo) WriteTo(io.Writer) (int64, error) {
+	panic("can't happen")
+}
+
+// fileWithoutWriteTo implements all the methods of *File other
+// than WriteTo. This is used to permit WriteTo to call io.Copy
+// without leading to a recursive call to WriteTo.
+type fileWithoutWriteTo struct {
+	noWriteTo
+	*File
+}
+
+func genericWriteTo(f *File, w io.Writer) (int64, error) {
+	return io.Copy(w, fileWithoutWriteTo{File: f})
 }
 
 // Seek sets the offset for the next Read or Write on file to offset, interpreted
@@ -622,24 +662,12 @@ func DirFS(dir string) fs.FS {
 	return dirFS(dir)
 }
 
-// containsAny reports whether any bytes in chars are within s.
-func containsAny(s, chars string) bool {
-	for i := 0; i < len(s); i++ {
-		for j := 0; j < len(chars); j++ {
-			if s[i] == chars[j] {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 type dirFS string
 
 func (dir dirFS) Open(name string) (fs.File, error) {
 	fullname, err := dir.join(name)
 	if err != nil {
-		return nil, &PathError{Op: "stat", Path: name, Err: err}
+		return nil, &PathError{Op: "open", Path: name, Err: err}
 	}
 	f, err := Open(fullname)
 	if err != nil {
@@ -737,10 +765,6 @@ func ReadFile(name string) ([]byte, error) {
 
 	data := make([]byte, 0, size)
 	for {
-		if len(data) >= cap(data) {
-			d := append(data[:cap(data)], 0)
-			data = d[:len(data)]
-		}
 		n, err := f.Read(data[len(data):cap(data)])
 		data = data[:len(data)+n]
 		if err != nil {
@@ -748,6 +772,11 @@ func ReadFile(name string) ([]byte, error) {
 				err = nil
 			}
 			return data, err
+		}
+
+		if len(data) >= cap(data) {
+			d := append(data[:cap(data)], 0)
+			data = d[:len(data)]
 		}
 	}
 }

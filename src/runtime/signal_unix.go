@@ -698,7 +698,7 @@ func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 		// the unwinding code.
 		gp.sig = sig
 		gp.sigcode0 = uintptr(c.sigcode())
-		gp.sigcode1 = uintptr(c.fault())
+		gp.sigcode1 = c.fault()
 		gp.sigpc = c.sigpc()
 
 		c.preparePanic(sig, gp)
@@ -734,44 +734,7 @@ func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 		startpanic_m()
 	}
 
-	if sig < uint32(len(sigtable)) {
-		print(sigtable[sig].name, "\n")
-	} else {
-		print("Signal ", sig, "\n")
-	}
-
-	print("PC=", hex(c.sigpc()), " m=", mp.id, " sigcode=", c.sigcode(), "\n")
-	if mp.incgo && gp == mp.g0 && mp.curg != nil {
-		print("signal arrived during cgo execution\n")
-		// Switch to curg so that we get a traceback of the Go code
-		// leading up to the cgocall, which switched from curg to g0.
-		gp = mp.curg
-	}
-	if sig == _SIGILL || sig == _SIGFPE {
-		// It would be nice to know how long the instruction is.
-		// Unfortunately, that's complicated to do in general (mostly for x86
-		// and s930x, but other archs have non-standard instruction lengths also).
-		// Opt to print 16 bytes, which covers most instructions.
-		const maxN = 16
-		n := uintptr(maxN)
-		// We have to be careful, though. If we're near the end of
-		// a page and the following page isn't mapped, we could
-		// segfault. So make sure we don't straddle a page (even though
-		// that could lead to printing an incomplete instruction).
-		// We're assuming here we can read at least the page containing the PC.
-		// I suppose it is possible that the page is mapped executable but not readable?
-		pc := c.sigpc()
-		if n > physPageSize-pc%physPageSize {
-			n = physPageSize - pc%physPageSize
-		}
-		print("instruction bytes:")
-		b := (*[maxN]byte)(unsafe.Pointer(pc))
-		for i := uintptr(0); i < n; i++ {
-			print(" ", hex(b[i]))
-		}
-		println()
-	}
-	print("\n")
+	gp = fatalsignal(sig, c, gp, mp)
 
 	level, _, docrash := gotraceback()
 	if level > 0 {
@@ -805,12 +768,63 @@ func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 			raiseproc(_SIGQUIT)
 			usleep(5 * 1000 * 1000)
 		}
+		printDebugLog()
 		crash()
 	}
 
 	printDebugLog()
 
 	exit(2)
+}
+
+func fatalsignal(sig uint32, c *sigctxt, gp *g, mp *m) *g {
+	if sig < uint32(len(sigtable)) {
+		print(sigtable[sig].name, "\n")
+	} else {
+		print("Signal ", sig, "\n")
+	}
+
+	if isSecureMode() {
+		exit(2)
+	}
+
+	print("PC=", hex(c.sigpc()), " m=", mp.id, " sigcode=", c.sigcode())
+	if sig == _SIGSEGV || sig == _SIGBUS {
+		print(" addr=", hex(c.fault()))
+	}
+	print("\n")
+	if mp.incgo && gp == mp.g0 && mp.curg != nil {
+		print("signal arrived during cgo execution\n")
+		// Switch to curg so that we get a traceback of the Go code
+		// leading up to the cgocall, which switched from curg to g0.
+		gp = mp.curg
+	}
+	if sig == _SIGILL || sig == _SIGFPE {
+		// It would be nice to know how long the instruction is.
+		// Unfortunately, that's complicated to do in general (mostly for x86
+		// and s930x, but other archs have non-standard instruction lengths also).
+		// Opt to print 16 bytes, which covers most instructions.
+		const maxN = 16
+		n := uintptr(maxN)
+		// We have to be careful, though. If we're near the end of
+		// a page and the following page isn't mapped, we could
+		// segfault. So make sure we don't straddle a page (even though
+		// that could lead to printing an incomplete instruction).
+		// We're assuming here we can read at least the page containing the PC.
+		// I suppose it is possible that the page is mapped executable but not readable?
+		pc := c.sigpc()
+		if n > physPageSize-pc%physPageSize {
+			n = physPageSize - pc%physPageSize
+		}
+		print("instruction bytes:")
+		b := (*[maxN]byte)(unsafe.Pointer(pc))
+		for i := uintptr(0); i < n; i++ {
+			print(" ", hex(b[i]))
+		}
+		println()
+	}
+	print("\n")
+	return gp
 }
 
 // sigpanic turns a synchronous signal into a run-time panic.
@@ -1167,10 +1181,34 @@ func msigrestore(sigmask sigset) {
 }
 
 // sigsetAllExiting is used by sigblock(true) when a thread is
-// exiting. sigset_all is defined in OS specific code, and per GOOS
-// behavior may override this default for sigsetAllExiting: see
-// osinit().
-var sigsetAllExiting = sigset_all
+// exiting.
+var sigsetAllExiting = func() sigset {
+	res := sigset_all
+
+	// Apply GOOS-specific overrides here, rather than in osinit,
+	// because osinit may be called before sigsetAllExiting is
+	// initialized (#51913).
+	if GOOS == "linux" && iscgo {
+		// #42494 glibc and musl reserve some signals for
+		// internal use and require they not be blocked by
+		// the rest of a normal C runtime. When the go runtime
+		// blocks...unblocks signals, temporarily, the blocked
+		// interval of time is generally very short. As such,
+		// these expectations of *libc code are mostly met by
+		// the combined go+cgo system of threads. However,
+		// when go causes a thread to exit, via a return from
+		// mstart(), the combined runtime can deadlock if
+		// these signals are blocked. Thus, don't block these
+		// signals when exiting threads.
+		// - glibc: SIGCANCEL (32), SIGSETXID (33)
+		// - musl: SIGTIMER (32), SIGCANCEL (33), SIGSYNCCALL (34)
+		sigdelset(&res, 32)
+		sigdelset(&res, 33)
+		sigdelset(&res, 34)
+	}
+
+	return res
+}()
 
 // sigblock blocks signals in the current thread's signal mask.
 // This is used to block signals while setting up and tearing down g

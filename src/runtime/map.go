@@ -70,7 +70,7 @@ const (
 	// Because of minimum alignment rules, bucketCnt is known to be at least 8.
 	// Represent as loadFactorNum/loadFactorDen, to allow integer math.
 	loadFactorDen = 2
-	loadFactorNum = (bucketCnt * 13 / 16) * loadFactorDen
+	loadFactorNum = loadFactorDen * bucketCnt * 13 / 16
 
 	// Maximum key or elem size to keep inline (instead of mallocing per element).
 	// Must fit in a uint8.
@@ -354,7 +354,7 @@ func makeBucketArray(t *maptype, b uint8, dirtyalloc unsafe.Pointer) (buckets un
 		// used with this value of b.
 		nbuckets += bucketShift(b - 4)
 		sz := t.Bucket.Size_ * nbuckets
-		up := roundupsize(sz)
+		up := roundupsize(sz, t.Bucket.PtrBytes == 0)
 		if up != sz {
 			nbuckets = up / t.Bucket.Size_
 		}
@@ -407,8 +407,8 @@ func mapaccess1(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
 		asanread(key, t.Key.Size_)
 	}
 	if h == nil || h.count == 0 {
-		if t.HashMightPanic() {
-			t.Hasher(key, 0) // see issue 23734
+		if err := mapKeyError(t, key); err != nil {
+			panic(err) // see issue 23734
 		}
 		return unsafe.Pointer(&zeroVal[0])
 	}
@@ -468,8 +468,8 @@ func mapaccess2(t *maptype, h *hmap, key unsafe.Pointer) (unsafe.Pointer, bool) 
 		asanread(key, t.Key.Size_)
 	}
 	if h == nil || h.count == 0 {
-		if t.HashMightPanic() {
-			t.Hasher(key, 0) // see issue 23734
+		if err := mapKeyError(t, key); err != nil {
+			panic(err) // see issue 23734
 		}
 		return unsafe.Pointer(&zeroVal[0]), false
 	}
@@ -707,8 +707,8 @@ func mapdelete(t *maptype, h *hmap, key unsafe.Pointer) {
 		asanread(key, t.Key.Size_)
 	}
 	if h == nil || h.count == 0 {
-		if t.HashMightPanic() {
-			t.Hasher(key, 0) // see issue 23734
+		if err := mapKeyError(t, key); err != nil {
+			panic(err) // see issue 23734
 		}
 		return
 	}
@@ -1436,8 +1436,7 @@ func reflectlite_maplen(h *hmap) int {
 	return h.count
 }
 
-const maxZero = 1024 // must match value in reflect/value.go:maxZero cmd/compile/internal/gc/walk.go:zeroValSize
-var zeroVal [maxZero]byte
+var zeroVal [abi.ZeroValSize]byte
 
 // mapinitnoop is a no-op function known the Go linker; if a given global
 // map (of the right size) is determined to be dead, the linker will
@@ -1553,7 +1552,7 @@ func mapclone2(t *maptype, src *hmap) *hmap {
 		}
 
 		if oldB >= dst.B { // main bucket bits in dst is less than oldB bits in src
-			dstBmap := (*bmap)(add(dst.buckets, uintptr(i)&bucketMask(dst.B)))
+			dstBmap := (*bmap)(add(dst.buckets, (uintptr(i)&bucketMask(dst.B))*uintptr(t.BucketSize)))
 			for dstBmap.overflow(t) != nil {
 				dstBmap = dstBmap.overflow(t)
 			}
@@ -1651,7 +1650,7 @@ func copyKeys(t *maptype, h *hmap, b *bmap, s *slice, offset uint8) {
 			if s.len >= s.cap {
 				fatal("concurrent map read and map write")
 			}
-			typedmemmove(t.Key, add(s.array, uintptr(s.len)*uintptr(t.KeySize)), k)
+			typedmemmove(t.Key, add(s.array, uintptr(s.len)*uintptr(t.Key.Size())), k)
 			s.len++
 		}
 		b = b.overflow(t)
@@ -1716,7 +1715,7 @@ func copyValues(t *maptype, h *hmap, b *bmap, s *slice, offset uint8) {
 			if s.len >= s.cap {
 				fatal("concurrent map read and map write")
 			}
-			typedmemmove(t.Elem, add(s.array, uintptr(s.len)*uintptr(t.ValueSize)), ele)
+			typedmemmove(t.Elem, add(s.array, uintptr(s.len)*uintptr(t.Elem.Size())), ele)
 			s.len++
 		}
 		b = b.overflow(t)

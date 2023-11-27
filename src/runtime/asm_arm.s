@@ -39,10 +39,10 @@ TEXT _rt0_arm_lib(SB),NOSPLIT,$104
 	MOVW	g, 32(R13)
 	MOVW	R11, 36(R13)
 
-	// Skip floating point registers on GOARM < 6.
-	MOVB    runtime·goarm(SB), R11
-	CMP	$6, R11
-	BLT	skipfpsave
+	// Skip floating point registers on goarmsoftfp != 0.
+	MOVB    runtime·goarmsoftfp(SB), R11
+	CMP	$0, R11
+	BNE     skipfpsave
 	MOVD	F8, (40+8*0)(R13)
 	MOVD	F9, (40+8*1)(R13)
 	MOVD	F10, (40+8*2)(R13)
@@ -77,9 +77,9 @@ nocgo:
 	BL	runtime·newosproc0(SB)
 rr:
 	// Restore callee-save registers and return.
-	MOVB    runtime·goarm(SB), R11
-	CMP	$6, R11
-	BLT	skipfprest
+	MOVB    runtime·goarmsoftfp(SB), R11
+	CMP     $0, R11
+	BNE     skipfprest
 	MOVD	(40+8*0)(R13), F8
 	MOVD	(40+8*1)(R13), F9
 	MOVD	(40+8*2)(R13), F10
@@ -197,10 +197,10 @@ TEXT runtime·breakpoint(SB),NOSPLIT,$0-0
 	RET
 
 TEXT runtime·asminit(SB),NOSPLIT,$0-0
-	// disable runfast (flush-to-zero) mode of vfp if runtime.goarm > 5
-	MOVB	runtime·goarm(SB), R11
-	CMP	$5, R11
-	BLE	4(PC)
+	// disable runfast (flush-to-zero) mode of vfp if runtime.goarmsoftfp == 0
+	MOVB	runtime·goarmsoftfp(SB), R11
+	CMP	$0, R11
+	BNE	4(PC)
 	WORD	$0xeef1ba10	// vmrs r11, fpscr
 	BIC	$(1<<24), R11
 	WORD	$0xeee1ba10	// vmsr fpscr, r11
@@ -740,8 +740,8 @@ havem:
 	// 2. or the duration of the C thread alive on pthread platforms.
 	// If the m on entry wasn't nil,
 	// 1. the thread might be a Go thread,
-	// 2. or it's wasn't the first call from a C thread on pthread platforms,
-	//    since the we skip dropm to resue the m in the first call.
+	// 2. or it wasn't the first call from a C thread on pthread platforms,
+	//    since then we skip dropm to reuse the m in the first call.
 	MOVW	savedm-4(SP), R6
 	CMP	$0, R6
 	B.NE	done

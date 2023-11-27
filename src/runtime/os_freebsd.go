@@ -50,6 +50,8 @@ func kevent(kq int32, ch *keventt, nch int32, ev *keventt, nev int32, ts *timesp
 func pipe2(flags int32) (r, w int32, errno int32)
 func fcntl(fd, cmd, arg int32) (ret int32, errno int32)
 
+func issetugid() int32
+
 // From FreeBSD's <sys/sysctl.h>
 const (
 	_CTL_HW      = 6
@@ -326,6 +328,7 @@ func minit() {
 //go:nosplit
 func unminit() {
 	unminitSignals()
+	getg().m.procid = 0
 }
 
 // Called from exitm, but not from drop, to undo the effect of thread-owned
@@ -417,6 +420,7 @@ func sysargs(argc int32, argv **byte) {
 const (
 	_AT_NULL     = 0  // Terminates the vector
 	_AT_PAGESZ   = 6  // Page size in bytes
+	_AT_PLATFORM = 15 // string identifying platform
 	_AT_TIMEKEEP = 22 // Pointer to timehands.
 	_AT_HWCAP    = 25 // CPU feature flags
 	_AT_HWCAP2   = 26 // CPU feature flags 2

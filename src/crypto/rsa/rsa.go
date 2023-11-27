@@ -150,11 +150,11 @@ func bigIntEqual(a, b *big.Int) bool {
 }
 
 // Sign signs digest with priv, reading randomness from rand. If opts is a
-// *PSSOptions then the PSS algorithm will be used, otherwise PKCS #1 v1.5 will
+// *[PSSOptions] then the PSS algorithm will be used, otherwise PKCS #1 v1.5 will
 // be used. digest must be the result of hashing the input message using
 // opts.HashFunc().
 //
-// This method implements crypto.Signer, which is an interface to support keys
+// This method implements [crypto.Signer], which is an interface to support keys
 // where the private part is kept in, for example, a hardware module. Common
 // uses should use the Sign* functions in this package directly.
 func (priv *PrivateKey) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
@@ -166,8 +166,8 @@ func (priv *PrivateKey) Sign(rand io.Reader, digest []byte, opts crypto.SignerOp
 }
 
 // Decrypt decrypts ciphertext with priv. If opts is nil or of type
-// *PKCS1v15DecryptOptions then PKCS #1 v1.5 decryption is performed. Otherwise
-// opts must have type *OAEPOptions and OAEP decryption is done.
+// *[PKCS1v15DecryptOptions] then PKCS #1 v1.5 decryption is performed. Otherwise
+// opts must have type *[OAEPOptions] and OAEP decryption is done.
 func (priv *PrivateKey) Decrypt(rand io.Reader, ciphertext []byte, opts crypto.DecrypterOpts) (plaintext []byte, err error) {
 	if opts == nil {
 		return DecryptPKCS1v15(rand, priv, ciphertext)
@@ -263,8 +263,11 @@ func (priv *PrivateKey) Validate() error {
 	return nil
 }
 
-// GenerateKey generates an RSA keypair of the given bit size using the
-// random source random (for example, crypto/rand.Reader).
+// GenerateKey generates a random RSA private key of the given bit size.
+//
+// Most applications should use [crypto/rand.Reader] as rand. Note that the
+// returned key does not depend deterministically on the bytes read from rand,
+// and may change between calls and/or between versions.
 func GenerateKey(random io.Reader, bits int) (*PrivateKey, error) {
 	return GenerateMultiPrimeKey(random, 2, bits)
 }
@@ -285,7 +288,7 @@ func GenerateKey(random io.Reader, bits int) (*PrivateKey, error) {
 //
 // Deprecated: The use of this function with a number of primes different from
 // two is not recommended for the above security, compatibility, and performance
-// reasons. Use GenerateKey instead.
+// reasons. Use [GenerateKey] instead.
 //
 // [On the Security of Multi-prime RSA]: http://www.cacr.math.uwaterloo.ca/techreports/2006/cacr2006-16.pdf
 func GenerateMultiPrimeKey(random io.Reader, nprimes int, bits int) (*PrivateKey, error) {
@@ -468,7 +471,7 @@ func mgf1XOR(out []byte, hash hash.Hash, seed []byte) {
 }
 
 // ErrMessageTooLong is returned when attempting to encrypt or sign a message
-// which is too large for the size of the key. When using SignPSS, this can also
+// which is too large for the size of the key. When using [SignPSS], this can also
 // be returned if the size of the salt is too large.
 var ErrMessageTooLong = errors.New("crypto/rsa: message too long for RSA key size")
 
@@ -500,6 +503,7 @@ func encrypt(pub *PublicKey, plaintext []byte) ([]byte, error) {
 //
 // The random parameter is used as a source of entropy to ensure that
 // encrypting the same message twice doesn't result in the same ciphertext.
+// Most applications should use [crypto/rand.Reader] as random.
 //
 // The label parameter may contain arbitrary data that will not be encrypted,
 // but which gives important context to the message. For example, if a given
@@ -510,6 +514,12 @@ func encrypt(pub *PublicKey, plaintext []byte) ([]byte, error) {
 // The message must be no longer than the length of the public modulus minus
 // twice the hash length, minus a further 2.
 func EncryptOAEP(hash hash.Hash, random io.Reader, pub *PublicKey, msg []byte, label []byte) ([]byte, error) {
+	// Note that while we don't commit to deterministic execution with respect
+	// to the random stream, we also don't apply MaybeReadByte, so per Hyrum's
+	// Law it's probably relied upon by some. It's a tolerable promise because a
+	// well-specified number of random bytes is included in the ciphertext, in a
+	// well-specified way.
+
 	if err := checkPub(pub); err != nil {
 		return nil, err
 	}
@@ -691,10 +701,10 @@ func decrypt(priv *PrivateKey, ciphertext []byte, check bool) ([]byte, error) {
 // Encryption and decryption of a given message must use the same hash function
 // and sha256.New() is a reasonable choice.
 //
-// The random parameter is legacy and ignored, and it can be as nil.
+// The random parameter is legacy and ignored, and it can be nil.
 //
 // The label parameter must match the value given when encrypting. See
-// EncryptOAEP for details.
+// [EncryptOAEP] for details.
 func DecryptOAEP(hash hash.Hash, random io.Reader, priv *PrivateKey, ciphertext []byte, label []byte) ([]byte, error) {
 	return decryptOAEP(hash, hash, random, priv, ciphertext, label)
 }

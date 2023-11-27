@@ -126,6 +126,45 @@ for example,
 see the [runtime documentation](/pkg/runtime#hdr-Environment_Variables)
 and the [go command documentation](/cmd/go#hdr-Build_and_test_caching).
 
+### Go 1.22
+
+Go 1.22 adds a configurable limit to control the maximum acceptable RSA key size
+that can be used in TLS handshakes, controlled by the [`tlsmaxrsasize` setting](/pkg/crypto/tls#Conn.Handshake).
+The default is tlsmaxrsasize=8192, limiting RSA to 8192-bit keys. To avoid
+denial of service attacks, this setting and default was backported to Go
+1.19.13, Go 1.20.8, and Go 1.21.1.
+
+Go 1.22 made it an error for a request or response read by a net/http
+client or server to have an empty Content-Length header.
+This behavior is controlled by the `httplaxcontentlength` setting.
+
+Go 1.22 changed the behavior of ServeMux to accept extended
+patterns and unescape both patterns and request paths by segment.
+This behavior can be controlled by the
+[`httpmuxgo121` setting](/pkg/net/http/#ServeMux).
+
+Go 1.22 added the [Alias type](/pkg/go/types#Alias) to [go/types](/pkg/go/types)
+for the explicit representation of [type aliases](/ref/spec#Type_declarations).
+Whether the type checker produces `Alias` types or not is controlled by the
+[`gotypesalias` setting](/pkg/go/types#Alias).
+For Go 1.22 it defaults to `gotypesalias=0`.
+For Go 1.23, `gotypealias=1` will become the default.
+This setting will be removed in a future release, Go 1.24 at the earliest.
+
+Go 1.22 changed the default minimum TLS version supported by both servers
+and clients to TLS 1.2. The default can be reverted to TLS 1.0 using the
+[`tls10server` setting](/pkg/crypto/tls/#Config).
+
+Go 1.22 changed the default TLS cipher suites used by clients and servers when
+not explicitly configured, removing the cipher suites which used RSA based key
+exchange. The default can be revert using the [`tlsrsakex` setting](/pkg/crypto/tls/#Config).
+
+Go 1.22 disabled
+[`ConnectionState.ExportKeyingMaterial`](/pkg/crypto/tls/#ConnectionState.ExportKeyingMaterial)
+when the connection supports neither TLS 1.3 nor Extended Master Secret
+(implemented in Go 1.21). It can be reenabled with the [`tlsunsafeekm`
+setting](/pkg/crypto/tls/#ConnectionState.ExportKeyingMaterial).
+
 ### Go 1.21
 
 Go 1.21 made it a run-time error to call `panic` with a nil interface value,
@@ -141,6 +180,10 @@ forms, controlled by the
 [`multipartmaxheaders` and `multipartmaxparts` settings](/pkg/mime/multipart#hdr-Limits)
 respectively.
 This behavior was backported to Go 1.19.8+ and Go 1.20.3+.
+
+Go 1.21 adds the support of Multipath TCP but it is only used if the application
+explicitly asked for it. This behavior can be controlled by the
+[`multipathtcp` setting](/pkg/net#Dialer.SetMultipathTCP).
 
 There is no plan to remove any of these settings.
 
@@ -179,7 +222,7 @@ There is no plan to remove this setting.
 ### Go 1.18
 
 Go 1.18 removed support for SHA1 in most X.509 certificates,
-controlled by the [`x509sha1` setting](/crypto/x509#InsecureAlgorithmError).
+controlled by the [`x509sha1` setting](/pkg/crypto/x509#InsecureAlgorithmError).
 This setting will be removed in a future release, Go 1.22 at the earliest.
 
 ### Go 1.10

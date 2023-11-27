@@ -206,7 +206,7 @@ func (check *Checker) builtin(x *operand, call *syntax.CallExpr, id builtinId) (
 
 		if mode == invalid {
 			// avoid error if underlying type is invalid
-			if under(x.typ) != Typ[Invalid] {
+			if isValid(under(x.typ)) {
 				code := InvalidCap
 				if id == _Len {
 					code = InvalidLen
@@ -490,7 +490,7 @@ func (check *Checker) builtin(x *operand, call *syntax.CallExpr, id builtinId) (
 		// (no argument evaluated yet)
 		arg0 := argList[0]
 		T := check.varType(arg0)
-		if T == Typ[Invalid] {
+		if !isValid(T) {
 			return
 		}
 
@@ -576,6 +576,16 @@ func (check *Checker) builtin(x *operand, call *syntax.CallExpr, id builtinId) (
 		// If nargs == 1, make sure x.mode is either a value or a constant.
 		if x.mode != constant_ {
 			x.mode = value
+			// A value must not be untyped.
+			check.assignment(x, &emptyInterface, "argument to "+bin.name)
+			if x.mode == invalid {
+				return
+			}
+		}
+
+		// Use the final type computed above for all arguments.
+		for _, a := range args {
+			check.updateExprType(a.expr, x.typ, true)
 		}
 
 		if check.recordTypes() && x.mode != constant_ {
@@ -590,7 +600,7 @@ func (check *Checker) builtin(x *operand, call *syntax.CallExpr, id builtinId) (
 		// new(T)
 		// (no argument evaluated yet)
 		T := check.varType(argList[0])
-		if T == Typ[Invalid] {
+		if !isValid(T) {
 			return
 		}
 
@@ -696,7 +706,7 @@ func (check *Checker) builtin(x *operand, call *syntax.CallExpr, id builtinId) (
 		// unsafe.Offsetof(x T) uintptr, where x must be a selector
 		// (no argument evaluated yet)
 		arg0 := argList[0]
-		selx, _ := unparen(arg0).(*syntax.SelectorExpr)
+		selx, _ := syntax.Unparen(arg0).(*syntax.SelectorExpr)
 		if selx == nil {
 			check.errorf(arg0, BadOffsetofSyntax, invalidArg+"%s is not a selector expression", arg0)
 			check.use(arg0)
@@ -893,6 +903,9 @@ func (check *Checker) builtin(x *operand, call *syntax.CallExpr, id builtinId) (
 			check.dump("%v: %s", atPos(x1), x1)
 			x1 = &t // use incoming x only for first argument
 		}
+		if x.mode == invalid {
+			return
+		}
 		// trace is only available in test mode - no need to record signature
 
 	default:
@@ -910,7 +923,7 @@ func hasVarSize(t Type, seen map[*Named]bool) (varSized bool) {
 	// Cycles are only possible through *Named types.
 	// The seen map is used to detect cycles and track
 	// the results of previously seen types.
-	if named, _ := t.(*Named); named != nil {
+	if named := asNamed(t); named != nil {
 		if v, ok := seen[named]; ok {
 			return v
 		}
@@ -941,7 +954,7 @@ func hasVarSize(t Type, seen map[*Named]bool) (varSized bool) {
 }
 
 // applyTypeFunc applies f to x. If x is a type parameter,
-// the result is a type parameter constrained by an new
+// the result is a type parameter constrained by a new
 // interface bound. The type bounds for that interface
 // are computed by applying f to each of the type bounds
 // of x. If any of these applications of f return nil,

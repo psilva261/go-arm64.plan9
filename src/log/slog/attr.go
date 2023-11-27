@@ -46,18 +46,18 @@ func Bool(key string, v bool) Attr {
 	return Attr{key, BoolValue(v)}
 }
 
-// Time returns an Attr for a time.Time.
+// Time returns an Attr for a [time.Time].
 // It discards the monotonic portion.
 func Time(key string, v time.Time) Attr {
 	return Attr{key, TimeValue(v)}
 }
 
-// Duration returns an Attr for a time.Duration.
+// Duration returns an Attr for a [time.Duration].
 func Duration(key string, v time.Duration) Attr {
 	return Attr{key, DurationValue(v)}
 }
 
-// Group returns an Attr for a Group Value.
+// Group returns an Attr for a Group [Value].
 // The first argument is the key; the remaining arguments
 // are converted to Attrs as in [Logger.Log].
 //
@@ -81,7 +81,7 @@ func argsToAttrSlice(args []any) []Attr {
 }
 
 // Any returns an Attr for the supplied value.
-// See [Value.AnyValue] for how values are treated.
+// See [AnyValue] for how values are treated.
 func Any(key string, value any) Attr {
 	return Attr{key, AnyValue(value)}
 }

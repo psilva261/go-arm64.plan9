@@ -72,6 +72,14 @@ To remove a dependency on a module and downgrade modules that require it:
 
 	go get example.com/mod@none
 
+To upgrade the minimum required Go version to the latest released Go version:
+
+	go get go@latest
+
+To upgrade the Go toolchain to the latest patch release of the current Go toolchain:
+
+	go get toolchain@patch
+
 See https://golang.org/ref/mod#go-get for details.
 
 In earlier versions of Go, 'go get' was used to build and install packages.
@@ -106,6 +114,9 @@ from a repository.
 
 For more about modules, see https://golang.org/ref/mod.
 
+For more about using 'go get' to update the minimum Go version and
+suggested Go toolchain, see https://go.dev/doc/toolchain.
+
 For more about specifying packages, see 'go help packages'.
 
 This text describes the behavior of get using modules to manage source
@@ -115,23 +126,6 @@ See 'go help gopath-get'.
 
 See also: go build, go install, go clean, go mod.
 	`,
-}
-
-// Note that this help text is a stopgap to make the module-aware get help text
-// available even in non-module settings. It should be deleted when the old get
-// is deleted. It should NOT be considered to set a precedent of having hierarchical
-// help names with dashes.
-var HelpModuleGet = &base.Command{
-	UsageLine: "module-get",
-	Short:     "module-aware go get",
-	Long: `
-The 'go get' command changes behavior depending on whether the
-go command is running in module-aware mode or legacy GOPATH mode.
-This help text, accessible as 'go help module-get' even in legacy GOPATH mode,
-describes 'go get' as it operates in module-aware mode.
-
-Usage: ` + CmdGet.UsageLine + `
-` + CmdGet.Long,
 }
 
 var HelpVCS = &base.Command{
@@ -333,7 +327,7 @@ func runGet(ctx context.Context, cmd *base.Command, args []string) {
 			// The result of any version query for a given module — even "upgrade" or
 			// "patch" — is always relative to the build list at the start of
 			// the 'go get' command, not an intermediate state, and is therefore
-			// dederministic and therefore cachable, and the constraints on the
+			// deterministic and therefore cacheable, and the constraints on the
 			// selected version of each module can only narrow as we iterate.
 			//
 			// "all" is functionally very similar to a wildcard pattern. The set of
@@ -348,7 +342,7 @@ func runGet(ctx context.Context, cmd *base.Command, args []string) {
 
 		// When we load imports, we detect the following conditions:
 		//
-		// - missing transitive depencies that need to be resolved from outside the
+		// - missing transitive dependencies that need to be resolved from outside the
 		//   current build list (note that these may add new matches for existing
 		//   pattern queries!)
 		//

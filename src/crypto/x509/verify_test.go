@@ -368,7 +368,7 @@ var verifyTests = []verifyTest{
 		},
 	},
 	{
-		// When there are two parents, one with a incorrect subject but matching SKID
+		// When there are two parents, one with an incorrect subject but matching SKID
 		// and one with a correct subject but missing SKID, the latter should be
 		// considered as a possible parent.
 		leaf:        leafMatchingAKIDMatchingIssuer,
@@ -512,22 +512,21 @@ func testVerify(t *testing.T, test verifyTest, useSystemRoots bool) {
 		return true
 	}
 
-	// Every expected chain should match 1 returned chain
+	// Every expected chain should match one (or more) returned chain. We tolerate multiple
+	// matches, as due to root store semantics it is plausible that (at least on the system
+	// verifiers) multiple identical (looking) chains may be returned when two roots with the
+	// same subject are present.
 	for _, expectedChain := range test.expectedChains {
-		nChainMatched := 0
+		var match bool
 		for _, chain := range chains {
 			if doesMatch(expectedChain, chain) {
-				nChainMatched++
+				match = true
+				break
 			}
 		}
 
-		if nChainMatched != 1 {
-			t.Errorf("Got %v matches instead of %v for expected chain %v", nChainMatched, 1, expectedChain)
-			for _, chain := range chains {
-				if doesMatch(expectedChain, chain) {
-					t.Errorf("\t matched %v", chainToDebugString(chain))
-				}
-			}
+		if !match {
+			t.Errorf("No match found for %v", expectedChain)
 		}
 	}
 
@@ -1919,11 +1918,13 @@ type trustGraphEdge struct {
 	Subject        string
 	Type           int
 	MutateTemplate func(*Certificate)
+	Constraint     func([]*Certificate) error
 }
 
 type rootDescription struct {
 	Subject        string
 	MutateTemplate func(*Certificate)
+	Constraint     func([]*Certificate) error
 }
 
 type trustGraphDescription struct {
@@ -1976,19 +1977,23 @@ func buildTrustGraph(t *testing.T, d trustGraphDescription) (*CertPool, *CertPoo
 
 	certs := map[string]*Certificate{}
 	keys := map[string]crypto.Signer{}
-	roots := []*Certificate{}
+	rootPool := NewCertPool()
 	for _, r := range d.Roots {
 		k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
 			t.Fatalf("failed to generate test key: %s", err)
 		}
 		root := genCertEdge(t, r.Subject, k, r.MutateTemplate, rootCertificate, nil, nil)
-		roots = append(roots, root)
+		if r.Constraint != nil {
+			rootPool.AddCertWithConstraint(root, r.Constraint)
+		} else {
+			rootPool.AddCert(root)
+		}
 		certs[r.Subject] = root
 		keys[r.Subject] = k
 	}
 
-	intermediates := []*Certificate{}
+	intermediatePool := NewCertPool()
 	var leaf *Certificate
 	for _, e := range d.Graph {
 		issuerCert, ok := certs[e.Issuer]
@@ -2014,16 +2019,12 @@ func buildTrustGraph(t *testing.T, d trustGraphDescription) (*CertPool, *CertPoo
 		if e.Subject == d.Leaf {
 			leaf = cert
 		} else {
-			intermediates = append(intermediates, cert)
+			if e.Constraint != nil {
+				intermediatePool.AddCertWithConstraint(cert, e.Constraint)
+			} else {
+				intermediatePool.AddCert(cert)
+			}
 		}
-	}
-
-	rootPool, intermediatePool := NewCertPool(), NewCertPool()
-	for i := len(roots) - 1; i >= 0; i-- {
-		rootPool.AddCert(roots[i])
-	}
-	for i := len(intermediates) - 1; i >= 0; i-- {
-		intermediatePool.AddCert(intermediates[i])
 	}
 
 	return rootPool, intermediatePool, leaf
@@ -2420,7 +2421,7 @@ func TestPathBuilding(t *testing.T) {
 		{
 			// A name constraint on the root should apply to any names that appear
 			// on the intermediate, meaning there is no valid chain.
-			name: "contrained root, invalid intermediate",
+			name: "constrained root, invalid intermediate",
 			graph: trustGraphDescription{
 				Roots: []rootDescription{
 					{
@@ -2455,7 +2456,7 @@ func TestPathBuilding(t *testing.T) {
 		{
 			// A name constraint on the intermediate does not apply to the intermediate
 			// itself, so this is a valid chain.
-			name: "contrained intermediate, non-matching SAN",
+			name: "constrained intermediate, non-matching SAN",
 			graph: trustGraphDescription{
 				Roots: []rootDescription{{Subject: "root"}},
 				Leaf:  "leaf",
@@ -2480,6 +2481,78 @@ func TestPathBuilding(t *testing.T) {
 				},
 			},
 			expectedChains: []string{"CN=leaf -> CN=inter -> CN=root"},
+		},
+		{
+			// A code constraint on the root, applying to one of two intermediates in the graph, should
+			// result in only one valid chain.
+			name: "code constrained root, two paths, one valid",
+			graph: trustGraphDescription{
+				Roots: []rootDescription{{Subject: "root", Constraint: func(chain []*Certificate) error {
+					for _, c := range chain {
+						if c.Subject.CommonName == "inter a" {
+							return errors.New("bad")
+						}
+					}
+					return nil
+				}}},
+				Leaf: "leaf",
+				Graph: []trustGraphEdge{
+					{
+						Issuer:  "root",
+						Subject: "inter a",
+						Type:    intermediateCertificate,
+					},
+					{
+						Issuer:  "root",
+						Subject: "inter b",
+						Type:    intermediateCertificate,
+					},
+					{
+						Issuer:  "inter a",
+						Subject: "inter c",
+						Type:    intermediateCertificate,
+					},
+					{
+						Issuer:  "inter b",
+						Subject: "inter c",
+						Type:    intermediateCertificate,
+					},
+					{
+						Issuer:  "inter c",
+						Subject: "leaf",
+						Type:    leafCertificate,
+					},
+				},
+			},
+			expectedChains: []string{"CN=leaf -> CN=inter c -> CN=inter b -> CN=root"},
+		},
+		{
+			// A code constraint on the root, applying to the only path, should result in an error.
+			name: "code constrained root, one invalid path",
+			graph: trustGraphDescription{
+				Roots: []rootDescription{{Subject: "root", Constraint: func(chain []*Certificate) error {
+					for _, c := range chain {
+						if c.Subject.CommonName == "leaf" {
+							return errors.New("bad")
+						}
+					}
+					return nil
+				}}},
+				Leaf: "leaf",
+				Graph: []trustGraphEdge{
+					{
+						Issuer:  "root",
+						Subject: "inter",
+						Type:    intermediateCertificate,
+					},
+					{
+						Issuer:  "inter",
+						Subject: "leaf",
+						Type:    leafCertificate,
+					},
+				},
+			},
+			expectedErr: "x509: certificate signed by unknown authority (possibly because of \"bad\" while trying to verify candidate authority certificate \"root\")",
 		},
 	}
 

@@ -93,6 +93,10 @@ func semawakeup(mp *m) {
 }
 
 func osinit() {
+	// Call miniterrno so that we can safely make system calls
+	// before calling minit on m0.
+	miniterrno()
+
 	ncpu = int32(sysconf(__SC_NPROCESSORS_ONLN))
 	physPageSize = sysconf(__SC_PAGE_SIZE)
 }
@@ -179,6 +183,7 @@ func minit() {
 
 func unminit() {
 	unminitSignals()
+	getg().m.procid = 0
 }
 
 // Called from exitm, but not from drop, to undo the effect of thread-owned
@@ -372,4 +377,44 @@ const sigPerThreadSyscall = 1 << 31
 //go:nosplit
 func runPerThreadSyscall() {
 	throw("runPerThreadSyscall only valid on linux")
+}
+
+//go:nosplit
+func getuid() int32 {
+	r, errno := syscall0(&libc_getuid)
+	if errno != 0 {
+		print("getuid failed ", errno)
+		throw("getuid")
+	}
+	return int32(r)
+}
+
+//go:nosplit
+func geteuid() int32 {
+	r, errno := syscall0(&libc_geteuid)
+	if errno != 0 {
+		print("geteuid failed ", errno)
+		throw("geteuid")
+	}
+	return int32(r)
+}
+
+//go:nosplit
+func getgid() int32 {
+	r, errno := syscall0(&libc_getgid)
+	if errno != 0 {
+		print("getgid failed ", errno)
+		throw("getgid")
+	}
+	return int32(r)
+}
+
+//go:nosplit
+func getegid() int32 {
+	r, errno := syscall0(&libc_getegid)
+	if errno != 0 {
+		print("getegid failed ", errno)
+		throw("getegid")
+	}
+	return int32(r)
 }
